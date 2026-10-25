@@ -1,12 +1,18 @@
 # 03 — Ürün ve Arayüz Tasarımı
 
-> **Aşama:** 3 / 3 · **Ajan:** `tasarim-ajani` · **Tarih:** 25 Ekim 2026 · **Durum:** rev. 1, kullanıcı onayı bekliyor
+> **Aşama:** 3 / 3 · **Ajan:** `tasarim-ajani` · **Tarih:** 25 Ekim 2026 · **Durum:** rev. 2 (uyum turu), kullanıcı onayı bekliyor
 >
 > **Girdiler (bağlayıcı):**
 > - `docs/00-brief.md`
-> - `docs/01-konsept.md` rev. 5 (MVP 10 özellik; sahne bazlı `L_ref` M2'nin içinde)
+> - `docs/01-konsept.md` rev. 6 (MVP 10 özellik; sahne bazlı `L_ref` M2'nin içinde; M1'e oynatma hızı, M6'ya elle altyazı gecikmesi eklendi)
 > - `docs/01b-ek-fikirler.md` (onaylı: N1 Temiz Nit MVP'de, N2 Ses Çekirdeği v1.1)
-> - `docs/02-cozum.md` (teknik çözüm). "Sahne bazlı `L_ref` (MVP)" alt bölümü bu belge yazılırken henüz eklenmemişti. Bu yüzden o konuda aşağıdaki kullanıcı kararları esas alındı ve eksikler §11'de ajan 2'ye geri bildirim olarak yazıldı.
+> - `docs/02-cozum.md` (teknik çözüm): özellikle §3.5.1 (sahne bazlı `L_ref`), §4.10 (oynatma hızı), §4.11 (elle altyazı gecikmesi), §10.1 (S0 ve "S0 v0.1 uygulama notu") ve §14 (G-01…G-20 yanıtları, `PlaybackEngine` olay sözleşmesi).
+>
+> **Rev. 2'de değişenler (uyum turu):**
+> - §11 artık "çözüldü" tablosudur; her G maddesinin kararı ilgili tasarım bölümüne işlendi. Yeni açık noktalar §11.2'de (G-21…G-24).
+> - Yeni MVP arayüzleri: **oynatma hızı** (§4.15) ve **elle altyazı gecikmesi** (§4.16).
+> - Akışlar: Jellyfin Quick Connect (§3.2.2), Plex web + PIN ve kod yedeği (§3.2.3).
+> - §9.5 durum modelleri §14'teki motor tipleriyle hizalandı. §9.1'e "v0.1'de uygulanan / v0.2'ye kalan" tablosu eklendi.
 >
 > **Bu belgede bağlayıcı olan kullanıcı kararları:**
 > - **Nit Çekirdeği 1 numaralı özellik.** SDR ve HDR'da tipik beyaz yaklaşık 1200 nit. Modlar: **Nit** (varsayılan) ve **Referans**. HDR'da **Maksimum** (varsayılan) ya da **Dengeli** eğrisi. Ayrıca **Tepe Kilidi**, **Temiz Nit** (görünmez; uzman modunda A/B ve bant haritası) ve sahne bazlı `L_ref` (teşhis kartında "sahne beyazı X → Y nit").
@@ -15,15 +21,16 @@
 > - **Diyalog:** tek düğme, 3 kademe.
 > - **Ses yükseltme (boost):** %100–%150 kaydırıcı, üst sınır kesin +6 dB, rota başına hatırlanır. **Limiter anahtarı** hem Ses panelinde hem Uzman katmanında, kolay erişilir. Limiter kapalıyken kırpma LED'i ve sayaç, açıkken anlık kazanç azaltma (dB) görünür. Atmos'ta boost "PCM'e çözüldü, nesneler kaybolur", DAC'ta "bit-perfect değil" göstergesi verir.
 > - **Altyazılar gömülü gelir.** OCR, çeviri ve otomatik senkron yok. Altyazı parlaklığı videodan ayrı ayarlanır.
+> - **Rev. 6 (kullanıcı onaylı):** Oynatma hızı 0,5×–2× (perde korunur) ve elle altyazı gecikmesi (±50 ms adım, ±10 s, dosya ve parça bazında hatırlanır) MVP'dedir.
 > - Abartı ve süs yok. Basit varsayılan, gerektiğinde derin uzman kontrolü.
-> - Platform kısıtları (02-cozum §0.4): PiP Referans yolunda çalışır, AirPlay video yok, Jellyfin adresi elle girilir, Plex hesapla, SMB Bonjour ile bulunur.
+> - Platform kısıtları (02-cozum §0.4, §3.12, §14): PiP Referans yolunda çalışır (yazılım çözücülerde de), AirPlay video yok, Jellyfin adresi elle girilir (parola ya da Quick Connect), Plex hesapla (web + PIN), SMB Bonjour ile bulunur.
 > - Cihaz: iPhone 11 Pro. 5,8", 60 Hz, çentikli, Dynamic Island yok, A13. Nit Çekirdeği ve Temiz Nit için 4,5 ms/kare GPU bütçesi ayrılmış durumda.
 >
 > **İşaretler:**
 > - **[doğrulandı]**: Apple belgesi ya da WWDC oturumuyla teyit edildi.
 > - **[doğrulanmalı]**: Çıkarım ya da ikincil kaynak. Uygulama aşamasında teyit edilecek.
 > - **[ölçülmeli]**: Yalnızca cihazda ölçülerek bilinebilir.
-> - **[ajan 2]**: Teknik tarafa geri bildirim (§11).
+> - **[ajan 2]**: Teknik tarafa açık geri bildirim (§11.2). Rev. 1'deki [ajan 2] işaretlerinin hepsi 02-cozum §14'te kapandı (§11.1).
 >
 > **Kapsam kuralı:** Teknik olarak çözülmemiş hiçbir şey MVP ekranına girmez. v1.1 ve sonrası özellikler yalnızca "yer ayrıldı" notuyla anılır; MVP arayüzünde devre dışı düğme olarak bile görünmez.
 
@@ -41,7 +48,10 @@
   - **Diyalog** alt şeritte, tek dokunuşla 3 kademe arasında döner.
   - **Limiter** anahtarı Ses panelinin ana düzeyinde durur, ölçer hemen yanındadır.
 - **Dürüst zincir:** Format göstergeleri "kaynak → işlem → çıkış" dilbilgisiyle yazılır. Sadakatten her sapma amber renkte ve nedeniyle gösterilir.
-- **İlk kodlanacak ekran: S0 Nit Laboratuvarı** (§9.1). Bu ekran sonradan Laboratuvar'da yaşamaya devam eder; bileşenleri (headroom göstergesi, mod anahtarı, HUD) oynatıcıya aynen taşınır.
+- **Rev. 6 eklemeleri iki dokunuştadır:**
+  - **Oynatma hızı:** Diğer (⋯) panelinin başında 7 kademe (0,5×–2×). Hız 1× değilken oynatma kümesinde bir hız rozeti görünür (§4.15).
+  - **Altyazı gecikmesi:** Altyazı panelinde ±50 ms adımlı ayar. Altyazı düğmesine basılı tutunca doğrudan oraya gidilir (§4.16).
+- **İlk kodlanacak ekran: S0 Nit Laboratuvarı** (§9.1). v0.1 kodda var; eşitlik ve tonalite testleri v0.2'de. Bu ekran sonradan Laboratuvar'da yaşamaya devam eder; bileşenleri (headroom göstergesi, mod anahtarı, HUD) oynatıcıya aynen taşınır.
 - **İlk üç sprint:**
   1. Tasarım sistemi temeli, Nit Laboratuvarı, Ses Laboratuvarı ve Tasarım Kataloğu
   2. Oynatıcı v1, uygulama iskeleti ve Dosyalar kaynağı
@@ -84,8 +94,8 @@ Varsayılan her zaman doğrudur. Derinlik kat kat açılır ve hiçbir kat gizle
 |---|---|---|
 | 0 · Varsayılan | Hiçbir ayar gerekmez. Parça seçimi, Nit, Temiz Nit ve rota profili otomatik. | — |
 | 1 · Hızlı | Nit/Referans, Diyalog, oynat/sar | Oynatıcı şeridinde tek dokunuş |
-| 2 · Panel | Eğri, Tepe Kilidi, parça, boost, limiter, altyazı parlaklığı | Şeritteki panel düğmesi |
-| 3 · Uzman | Temiz Nit kipi, A/B, bant haritası, `L_ref`, limiter kipi, Atmos'u koru… | Her panelin dibindeki **Uzman** bölümü (açık/kapalı hali hatırlanır) |
+| 2 · Panel | Eğri, Tepe Kilidi, parça, boost, limiter, altyazı parlaklığı, altyazı gecikmesi, oynatma hızı | Şeritteki panel düğmesi |
+| 3 · Uzman | Temiz Nit kipi, A/B, bant haritası, `L_ref` ve sahne sapma sınırı, limiter kipi, Atmos'u koru, PGS boyutu, hızı hatırla… | Her panelin dibindeki **Uzman** bölümü (açık/kapalı hali hatırlanır) |
 | 4 · Laboratuvar | Ölçüm desenleri, eşitlik testi, CSV, ham float kipi | Ayarlar > Uzman > Laboratuvar |
 
 ### İ-5. Arayüz misafirdir: SDR, opak, geçici
@@ -188,6 +198,8 @@ erDiagram
   EPISODE ||--o| PLAYBACK_STATE : "ilerleme"
   MOVIE ||--o| CONTENT_OVERRIDE : "geçersiz kılma"
   EPISODE ||--o| CONTENT_OVERRIDE : "geçersiz kılma"
+  MEDIA_FILE ||--o| FILE_PREF : "dosya tercihi"
+  FILE_PREF ||--o{ SUBTITLE_DELAY : "altyazı parçası başına"
   ROUTE_PREF }o--|| ROUTE_CLASS : "rota başına"
 ```
 
@@ -201,6 +213,7 @@ erDiagram
 | **Sanatçı → Albüm → Parça** | Etiketler (Vorbis comment / ID3 / MP4), disk no, ReplayGain, kapak | `Library` |
 | **İzleme durumu** | Konum, tamamlandı mı, güncelleme zamanı. CloudKit ile senkronlanır. | M8 |
 | **İçerik geçersiz kılma** | Seçilen ses ve altyazı parçası (kullanıcı değiştirdiyse), "bu film için" boost değeri | M10 (K-26), S1 |
+| **Dosya tercihi** (rev. 6) | Anahtar: dosya kimliği (kaynak + yol + boyut + değişme zamanı; taşınan dosya için ilk ve son 1 MB'ın SHA-256 özeti). Alanlar: hatırlanan oynatma hızı (yalnızca "Bu dosyada hızı hatırla" açıksa), **altyazı parçası başına gecikme** (ms; 0 dışındaki her değer kendiliğinden saklanır) | 02-cozum §4.10, §4.11 (`Library`, SwiftData) |
 | **Rota tercihi** | Rota sınıfı (hoparlör / kulaklık ve BT / AirPlay / USB DAC) başına boost yüzdesi | K-26 |
 
 **Sürüm seçimi kuralı (sıfır ayar):** Bir filmin birden çok dosyası varsa varsayılan olarak bu cihazda oynayabilen en sadık sürüm seçilir: DV > HDR10 > HLG > SDR, aynı sınıfta yüksek çözünürlük ve kayıpsız ses önce. 4K AV1 gibi oynatılamayan sürümler elenir. Kullanıcı detay ekranında sürümü değiştirebilir; seçim içerik geçersiz kılması olarak saklanır.
@@ -244,6 +257,7 @@ Ayarlar
 │     ├─ Temiz Nit .............. [Otomatik] · Güçlü · Kapalı
 │     ├─ Titreşim ............... Kapalı · [İnce] · Orta
 │     ├─ Referans beyaz ......... [Sahne bazlı] · Sabit 203 nit · Elle (100–300 nit)
+│     ├─ Sahne sapma sınırı ..... 0 ─[0,5]─ 1 stop   (yalnızca Sahne bazlı'da)
 │     ├─ Beyaz hedefi (Maksimum)  0,90 ─[0,95]─ 0,98
 │     ├─ SDR gama ............... [Otomatik] · 2,2 · 2,4     (Otomatik = S0 sonucu)
 │     └─ Kesin kadans ........... [Kapalı]  "23,976 içerik %0,1 hızlı oynar; ses perdesi 1,7 sent kayar."
@@ -275,7 +289,9 @@ Ayarlar
 │  ├─ Kontrolleri gizle ......... 2 sn · [3 sn] · 5 sn
 │  ├─ Devam ederken geri sar .... [5 sn]
 │  ├─ Sonraki bölümü oynat ...... [Açık]
-│  └─ Ana ekrana geçince PiP .... (varsayılanı AS-31 belirler; bkz. §4.11)
+│  ├─ Ana ekrana geçince PiP .... (varsayılanı AS-31 belirler; bkz. §4.11)
+│  ├─ PGS ve VobSub boyutu ...... %80 ─[%100]─ %150   (bit eşlem altyazılar; §4.6)
+│  └─ Dosyaya özel kayıtlar ▸ ... "Hatırlanan hızlar: 3 dosya · Altyazı gecikmeleri: 12 parça" [Hepsini sil]
 ├─ Senkron ...................... iCloud ile izleme ilerlemesi [Açık]
 ├─ Uzman
 │  ├─ Uzman bölümlerini açık başlat [Kapalı]
@@ -288,7 +304,12 @@ Ayarlar
    └─ Gizlilik: "Hesap gerekmez. Ağa yalnızca kendi sunucuların ve TMDB'ye başlık sorgusu gider."
 ```
 
-**Not:** Ayarlar'daki Görüntü ve Ses değerleri **varsayılanlardır.** Oynatıcı panelinde yapılan değişiklik yalnızca o oturum içindir. İstisnalar, teknik çözümde hatırlanması tanımlı olanlardır: boost (rota başına, K-26), limiter durumu ve Uzman bölümünün açık/kapalı hali.
+**Not:** Ayarlar'daki Görüntü ve Ses değerleri **varsayılanlardır.** Oynatıcı panelinde yapılan değişiklik yalnızca o oturum içindir. İstisnalar, teknik çözümde hatırlanması tanımlı olanlardır:
+- boost (rota başına, K-26) ve "bu film için" boost,
+- limiter durumu,
+- Uzman bölümünün açık/kapalı hali,
+- **altyazı gecikmesi** (dosya + parça bazında, kendiliğinden; 02-cozum §4.11),
+- **oynatma hızı**, yalnızca o dosyada "Bu dosyada hızı hatırla" açıksa (02-cozum §4.10). Hız için genel bir varsayılan yoktur; her yeni dosya 1× ile başlar.
 
 ---
 
@@ -390,21 +411,54 @@ flowchart TD
 - "DiskStation'a ulaşılamıyor. Aynı Wi-Fi ağında mısın?" [Yeniden dene]
 - "Bu sunucu yalnızca SMB1 kullanıyor. Sunucuda SMB2 ya da SMB3'ü aç." (libsmb2 SMB2/3 konuşur.)
 
-#### 3.2.2 Jellyfin (adres elle girilir)
+#### 3.2.2 Jellyfin (adres elle girilir; parola ya da Quick Connect)
+
+Kimlik doğrulama 02-cozum §14 G-15 ve K-35'e göredir: kullanıcı adı ve parola (`/Users/AuthenticateByName`) ya da **Quick Connect** (`/QuickConnect/Initiate` → başka cihazda onay → `/Users/AuthenticateWithQuickConnect`). Uç nokta adları **[doğrulanmalı]**.
 
 | Adım | Ekran | Durumlar | Metin / davranış |
 |---|---|---|---|
 | 1 | E-25 Adres | Tek alan, yer tutucu `http://192.168.1.20:8096`. Klavye `.URL`. [Devam] | Keşif yok; nedeni alanın altında tek satırla yazar: "Jellyfin'in otomatik keşfi bu cihazda kullanılamıyor; adresi sunucunun panelinde bulabilirsin." |
 | 2 | Doğrulama | **Denetleniyor** → **Bulundu:** "Ev · Jellyfin 10.x" ve yeşil onay. **Hata:** "Bu adreste Jellyfin bulunamadı." · "Uzak sunucular için HTTPS gerekir; yerel ağdaysan IP adresini kullan." | Yerel ağda HTTP'ye izin var (`NSAllowsLocalNetworking`). |
-| 3 | E-26 Giriş ve kütüphaneler | Kullanıcı adı, parola → [Giriş yap] → kütüphane listesi; her satırda anahtar (Filmler ✓, Diziler ✓, Müzik ✓) → [Ekle] | Oynatma her zaman doğrudan oynatmadır (direct play); sunucuda kod dönüştürme yapılmaz. |
+| 3 | E-26 Giriş | Üstte segment: **Parola** · Quick Connect. Varsayılan Parola. | Segment seçimi hatırlanmaz; her eklemede Parola ile başlar. |
+| 3a | E-26 · Parola | Kullanıcı adı, parola → [Giriş yap] (alt yapışık). **Giriş yapılıyor:** düğmede döner gösterge. **Hata:** "Kullanıcı adı ya da parola yanlış." | Erişim belirteci Keychain'e yazılır. |
+| 3b | E-26 · Quick Connect | **Kod isteniyor** → **Kod hazır:** kod büyük ve harf aralıklı yazılır (C-35) + talimat + "Onay bekleniyor…" ve küçük döner gösterge + [Kodu kopyala]. **Onaylandı:** yeşil onay, haptik `.success`, 0,5 sn sonra kendiliğinden adım 4. **Süresi doldu:** "Kodun süresi doldu." [Yeni kod]. **Sunucuda kapalı:** "Quick Connect bu sunucuda kapalı. Yönetici panelinden açılabilir ya da parolayla gir." [Parolayla gir] | Talimat: "Jellyfin'de oturumu açık bir cihazda Profil > Quick Connect'e gir ve bu kodu onayla." Yoklama sürerken ekran açık kalır; sayfa kapatılırsa yoklama durur. |
+| 4 | E-26 Kütüphaneler | Kütüphane listesi; her satırda anahtar (Filmler ✓, Diziler ✓, Müzik ✓) → [Ekle] | Oynatma her zaman doğrudan oynatmadır (direct play); sunucuda kod dönüştürme yapılmaz. |
 
-#### 3.2.3 Plex (hesapla)
+**E-26 · Quick Connect (dikey, sayfa yığını):**
+
+```
+┌───────────────────────────────────────┐
+│ ‹ Geri          Jellyfin girişi        │
+│ ┌──────────────────┬──────────────────┐│
+│ │      Parola      │  Quick Connect   ││  C-04
+│ └──────────────────┴──────────────────┘│
+│                                        │
+│              4 8 2 9 1 3               │  C-35: SF Mono, .largeTitle, harf aralığı 8 pt
+│            [Kodu kopyala]              │  metin düğmesi
+│                                        │
+│  Jellyfin'de oturumu açık bir cihazda  │  body, ikincil
+│  Profil > Quick Connect'e gir ve bu    │
+│  kodu onayla.                          │
+│                                        │
+│  (◌) Onay bekleniyor…                  │  footnote, üçüncül
+│                                        │
+│            Parolayla gir               │  metin düğmesi
+└───────────────────────────────────────┘
+```
+
+#### 3.2.3 Plex (hesapla: web + PIN, yedeği kod)
+
+Kimlik doğrulama 02-cozum §14 G-15 ve K-35'e göredir: uygulama bir PIN oluşturur, plex.tv giriş sayfası sistem web oturumunda (`ASWebAuthenticationSession`) açılır, uygulama PIN'i yoklayarak belirteci alır. Yedek: 4 karakterlik kod ve plex.tv/link. Uç nokta adları **[doğrulanmalı]**.
 
 | Adım | Ekran | Durumlar | Metin / davranış |
 |---|---|---|---|
-| 1 | E-27 Plex | [plex.tv ile oturum aç] | Sistem web kimlik doğrulama sayfası açılır (`ASWebAuthenticationSession`). Yöntem (PIN ya da OAuth) **[ajan 2]**. |
-| 2 | Sunucular | Hesaptaki sunucular; her satırda rozet: "Yerel ağ" ya da "Uzak" | Uzak satırın altında: "Uzak bağlantı remux için yavaş olabilir." |
-| 3 | Kütüphaneler | Anahtarlarla seçim → [Ekle] | Jellyfin ile aynı. |
+| 1 | E-27 Plex | [plex.tv ile oturum aç] (birincil, alt yapışık) · altında metin düğmesi "Tarayıcı olmadan: kodla bağlan" | Dokununca önce sistemin izin uyarısı gelir ("arifetanga, oturum açmak için plex.tv'yi kullanmak istiyor"), sonra plex.tv sayfası açılır. |
+| 2 | Bekleme | Web sayfası kapanınca E-27'de "plex.tv onayı bekleniyor…" ve döner gösterge. **İptal:** "Oturum açma iptal edildi." [Yeniden dene]. **Zaman aşımı:** "plex.tv onayı gelmedi." [Yeniden dene] · [Kodla bağlan] | Belirteç Keychain'e yazılır. Haptik `.success`. |
+| 2′ | E-27 · Kod (yedek) | 4 karakterlik kod (C-35) + "Başka bir cihazda plex.tv/link adresine git ve bu kodu gir." + "Onay bekleniyor…" + [Kodu kopyala]. **Süresi doldu:** [Yeni kod] | Tarayıcı açılmayan durumlar ve parola yöneticisi başka cihazda olanlar için. |
+| 3 | Sunucular | Hesaptaki sunucular; her satırda rozet: "Yerel ağ" ya da "Uzak" | Uzak satırın altında: "Uzak bağlantı remux için yavaş olabilir." |
+| 4 | Kütüphaneler | Anahtarlarla seçim → [Ekle] | Jellyfin ile aynı. |
+
+Sistem web oturumu bir sistem sayfasıdır ve Liquid Glass kullanabilir. Bu kabul edilebilir: kütüphane bağlamındadır, arkasında video yoktur (§6.6).
 
 #### 3.2.4 Dosyalar
 
@@ -450,7 +504,7 @@ flowchart TD
 |---|---|---|---|
 | 1 | E-04 Film detayı | Yükleniyor (poster yer tutucusu düz renk) · Hazır · Kaynak çevrimdışı (Oynat düğmesi devre dışı, "Kaynağa ulaşılamıyor" satırı) | Birincil düğme ekranın altına yapışıktır (`safeAreaInset(edge: .bottom)`): ilerleme varsa **"Devam et · 1:02:13"**, yoksa **"Oynat"**. Altında metin düğmesi: "Baştan başla". |
 | 2 | Oynatıcı: Açılıyor | Siyah ekran, ortada döner gösterge, altında başlık (footnote). ISO/BDMV'de "Ana başlık bulunuyor…" | Gösterge yalnızca 300 ms'den uzun süren bekleyişte belirir. |
-| 3 | İlk kare | Kontroller 3 sn görünür | Devam ediliyorsa üstte HUD çipi (5 sn): "Kaldığın yerden: 1:02:08 · [Baştan başla]". Geri sarma 5 sn (Ayarlar). |
+| 3 | İlk kare | Kontroller 3 sn görünür | Devam ediliyorsa üstte HUD çipi (5 sn): "Kaldığın yerden: 1:02:08 · [Baştan başla]". Geri sarma 5 sn (Ayarlar). Dosya için kayıtlı hız ya da altyazı gecikmesi varsa ardından HUD-19 gelir: "Bu dosya için kayıtlı: hız 1,5× · altyazı +250 ms" [Sıfırla] (§4.8). Hız, açılışta `open` komutunun hemen ardından `setRate` ile verilir; ilk kare zaten o hızdadır. |
 | 4 | Oynatılıyor | §4.3'teki görünürlük kuralları | — |
 | 5a | Bitti (dizi) | Sağ altta "Sonraki bölüm" kartı (§4.3) | 10 sn geri sayım; [Oynat] ve [İptal]. Ayarlardan kapatılabilir. |
 | 5b | Bitti (film) | Oynatıcı kapanır | Detay ekranında "İzlendi" işareti; birincil düğme "Yeniden izle". |
