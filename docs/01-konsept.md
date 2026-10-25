@@ -1,6 +1,11 @@
 # 01 — Konsept ve İnovasyon
 
-> **Aşama:** 1 / 3 · **Ajan:** `fikir-ajani` · **Tarih:** 25 Ekim 2026 · **Girdi:** `docs/00-brief.md` · **Durum:** kullanıcı onayı bekliyor
+> **Aşama:** 1 / 3 · **Ajan:** `fikir-ajani` · **Tarih:** 25 Ekim 2026 · **Girdi:** `docs/00-brief.md` · **Durum:** rev. 2, kullanıcı geri bildirimi işlendi, onay bekliyor
+>
+> **Rev. 2 değişiklikleri (kullanıcı kararı):**
+> - **Nit Çekirdeği eklendi ve en öncelikli özellik oldu (M2):** SDR'da da HDR'da da tipik beyaz yaklaşık 1200 nit.
+> - **OCR, çeviri ve otomatik altyazı senkronu kapsamdan çıktı:** Altyazılar videoyla birlikte, gömülü olarak geliyor.
+> - **OLED koruması parlaklığa dokunmayacak şekilde yeniden tanımlandı (P2).**
 >
 > **İşaretler:** **[doğrulandı]** = Apple dokümantasyonu, WWDC oturumu ya da iOS 27 sürüm notlarıyla teyit edildi. **[doğrulanmalı]** = ikincil kaynak, forum raporu ya da çıkarım. Ajan 2 bunları spike ile teyit etmeli.
 >
@@ -13,11 +18,11 @@
 - **Vizyon:** Kendi diskinden aldığın film ve müzik, iPhone 11 Pro'nun verebileceği en sadık görüntü ve sesle oynar. Tek dokunuş yeter, ayar gerekmez, tüm AI cihazda çalışır.
 - **MVP (8 özellik):**
   1. Evrensel oynatma çekirdeği (MKV/ISO/BDMV)
-  2. Referans HDR ve Dolby Vision (P7'nin P8.1'e dönüştürülmesi dahil)
-  3. Rotayı tanıyan sinema sesi (native Atmos, 7.1'in uzamsal sese aktarılması, diyalog/gece modu)
-  4. Audiophile müzik (bit-perfect DAC, gapless, loudness)
-  5. Altyazıda mükemmellik (458 ppi render, altyazının siyah banda taşınması, otomatik senkron)
-  6. Cihazda PGS OCR ve çevrimdışı Türkçe çeviri
+  2. **Nit Çekirdeği: SDR ve HDR'da tipik beyaz yaklaşık 1200 nit (en öncelikli)**
+  3. HDR ve Dolby Vision çözme (P7'nin P8.1'e dönüştürülmesi dahil). Nit Çekirdeğini besler; ayrıca "Referans" modu var.
+  4. Rotayı tanıyan sinema sesi (native Atmos, 7.1'in uzamsal sese aktarılması, diyalog/gece modu)
+  5. Audiophile müzik (bit-perfect DAC, gapless, loudness)
+  6. Gömülü altyazı (MKV içindeki PGS/SRT/ASS parçaları ekran çözünürlüğünde)
   7. Kaynaklar ve kütüphane (SMB, Jellyfin, Plex)
   8. Sıfır ayar deneyimi
 - **iOS 27 araştırmasından çıkan üç kritik ders:**
@@ -130,6 +135,7 @@ Toplam 54 fikir, altı eksende. Sütunlar: **#**, Fikir, Açıklama, Kullanıcı
 | V9 | SD/DVD/720p için AI ölçekleme | DVD (480/576) ve 720p ML ile 1.5x/2x büyütülür. Destek yoksa Metal shader yedeği (FSRCNN veya Anime4K tarzı) devreye girer. | Eski arşiv 458 ppi'de keskin görünür | 4 | 3 | Apple DTS: LL süper çözünürlük 640×480'de 2x destekliyor, ama 720p'de liste boş gelebilir. DVD için uygun. A13 `isSupported` **[doğrulanmalı]**. | VideoToolbox, Core ML, Metal |
 | V10 | DVD gren ve gürültü temizleme | VTTemporalNoiseFilter ile eski ve gürültülü kaynaklar temizlenir. | Daha temiz görüntü | 3 | 2 | `isSupported` ve A13 performansı bilinmiyor. Gren sanatsal bir tercih olabilir. | VideoToolbox, Metal |
 | V11 | Kaliteli deinterlace | DVD ve 1080i kaynaklar için Metal'de bwdif/yadif mantığıyla deinterlace. | Tarak çizgisi kalmaz | 3 | 4 | Bilinen algoritma; Metal'de ucuz. | Metal, Core Video |
+| **V12** | **Nit Çekirdeği (kullanıcının 1 numaralı isteği)** | Her kare kendi Metal çekirdeğimizden geçer ve tipik beyaz panelin tepe parlaklığına (yaklaşık 1200 nit) çıkarılır. SDR: BT.1886 → lineer → beyaz (1.0) × `currentEDRHeadroom`. HDR/DV: PQ/HLG → nit → referans beyaz (yaklaşık 203 nit ya da içerik analizi) hedefe çekilir; üstündeki vurgular yumuşak dirsekle kalan alana sıkıştırılır. Ayrıntılar M2'de. | Her içerik HDR tepe parlaklığında: güneş altında, parlak odada canlı ve parlak görüntü | 5 | 4 | EDR API'leri iOS 16'dan beri iOS'ta var (CAMetalLayer + `wantsExtendedDynamicRangeContent`, `currentEDRHeadroom`) **[doğrulandı]**. Sınırlar fiziksel: ABL (tam beyaz ekranda 1200 nit sürdürülemeyebilir), termal kısma, Düşük Güç Modu **[ölçülmeli]**. | Metal, QuartzCore (CAMetalLayer), UIKit (EDR headroom), VideoToolbox, Core Video |
 
 ### 3.B Ses kalitesi (lossless, uzamsal ses, DAC, EQ)
 
@@ -193,7 +199,7 @@ Toplam 54 fikir, altı eksende. Sütunlar: **#**, Fikir, Açıklama, Kullanıcı
 | # | Fikir | Açıklama | Kullanıcı değeri | W | F | Fizibilite gerekçesi | Framework'ler |
 |---|---|---|---|---|---|---|---|
 | P1 | OLED'e özgü sinema | Letterbox ve pillarbox bantlarında pikseller kapalı kalır (gerçek #000). Arayüz siyah öncelikli tasarlanır. Altyazı alttaki siyah banda taşınır. | Sonsuz kontrast; görüntünün üstünde yazı olmaz | 5 | 5 | Yalnızca render işi. 2.39:1'de üst-alt bant, 16:9'da yan bantlar oluşur. | Metal, SwiftUI |
-| P2 | OLED yanma koruması | Sabit arayüz öğeleri ve altyazı mikro düzeyde kaydırılır. Duraklatınca ekran karartılır. | Ekran ömrü uzar | 2 | 5 | — | UIKit |
+| P2 | OLED yanma koruması (rev. 2: **parlaklığa dokunmaz**) | Yalnızca sabit arayüz öğeleri (kontroller, rozetler, saat) birkaç saniye sonra gizlenir. Kalıcı kalması gerekenler 1–2 px mikro kaydırılır. **Video ve altyazı asla karartılmaz.** Duraklatınca karartma (rev. 1) kaldırıldı. | Ekran ömrü uzar, parlaklıktan taviz verilmez | 2 | 5 | — | UIKit, SwiftUI |
 | P3 | 458 ppi tipografi | ASS ve SRT ekran çözünürlüğünde vektör olarak render edilir. PGS kaliteli ölçeklenir. Font kalınlığı ayarlanabilir. | Baskı kalitesinde altyazı | 3 | 4 | libass (boşluk) ya da Core Text. | Core Text, Metal |
 | P4 | Mesafeye göre altyazı | TrueDepth ile göz-ekran mesafesi ölçülür; altyazı boyutu ve keskinleştirme buna göre ayarlanır. | Yatakta ve uzaktan okunur | 4 | 3 | ARKit pil tüketir ve gizlilik sorusu doğurur; isteğe bağlı. | ARKit |
 | P5 | Ortam ışığına uyum | Ön kameradan ışık tahmini yapılır; karanlık odada siyah seviyesi ve ton eşleme buna göre ayarlanır. | Karanlıkta göz yorulmaz | 4 | 2 | Kamerayı açık tutmak pil ve gizlilik maliyeti getirir. Doğruluk belirsiz. | ARKit, AVFoundation |
@@ -216,6 +222,8 @@ Toplam 54 fikir, altı eksende. Sütunlar: **#**, Fikir, Açıklama, Kullanıcı
 | 7 | A11 | Sahte hi-res dedektörü | 16 |
 
 Not: V2 (DV P7) ve A3 (native Atmos) W×F'de 15 alıyor. Yine de MVP'deler, çünkü ürünün farklılaştırıcı vaadi doğrudan bunlara dayanıyor.
+
+Rev. 2: V12 (Nit Çekirdeği, W×F = 20) kullanıcı kararıyla 1 numaralı özellik. I1, I3 ve I7 kullanıcı kararıyla kapsam dışı (bkz. bölüm 4).
 
 ---
 
@@ -241,6 +249,7 @@ Not: V2 (DV P7) ve A3 (native Atmos) W×F'de 15 alıyor. Yine de MVP'deler, çü
 | Blu-ray menüleri (BD-J) ve AACS/BD+ | Java runtime gerektiriyor; kapsam ve risk çok büyük. **DRM aşma kesinlikle yok.** Yalnızca şifresi çözülmüş kendi rip'ler desteklenir. | — |
 | True Tone, Night Shift ve parlaklığın programatik kontrolü | Public API yok (parlaklık dışında). | — (yerine kullanıcıya rehber gösterilir) |
 | TrollStore veya private entitlement'lar (`no-sandbox`, `platform-application`) | iOS 27'de mümkün değil (brief). | — |
+| PGS OCR (I1), çevrimdışı çeviri (I3), otomatik altyazı senkronu (I7) | **Kullanıcı kararı (rev. 2):** Altyazılar videoyla birlikte gömülü geliyor; bu özellikler gereksiz. | Kullanıcı isterse |
 
 ---
 
@@ -251,13 +260,52 @@ Not: V2 (DV P7) ve A3 (native Atmos) W×F'de 15 alıyor. Yine de MVP'deler, çü
 | # | MVP özelliği | Kapsam (dahil) | Kapsam dışı | Fikir ID'leri | Kullanıcı açısından başarı ölçütü |
 |---|---|---|---|---|---|
 | M1 | **Evrensel oynatma çekirdeği** | MKV, MP4, M2TS, ISO ve BDMV (ana film tespiti). HEVC ve H.264 donanımla; AV1 (≤1080p), VC-1 ve MPEG-2 yazılımla çözülür. 3:2 kadans, temel deinterlace, PiP ve arka planda ses. | Menüler, 3D/MVC | V1, S3, V8 (yalnızca kadans), V11 | Kendi UHD remux arşivinin %95'i ilk denemede ve takılmadan oynar. |
-| M2 | **Referans HDR ve Dolby Vision** | HDR10, HLG ve DV P5/P8 native EDR ile. DV P7 → P8.1 dönüşümü. HDR rozeti ve teşhis kartı. | Dinamik ton eşleme, HDR10+ (v1.1) | V1, V2, V5, S2 | P5, P7 ve P8 test dosyaları DV olarak tetiklenir ve rozet doğru görünür. |
-| M3 | **Rotaya göre sinema sesi** | E-AC-3 JOC'un native Atmos'a verilmesi. TrueHD ve DTS-HD MA'nın 7.1'e açılıp uzamsal sese aktarılması. Merkez kanal diyalog yükseltme ve gece modu. Bluetooth gecikme telafisi. | AUSoundIsolation ile stereo diyalog (v1.1) | A1, A3, A4, A5 (yalnızca merkez kanal) | AirPods'ta Atmos/uzamsal göstergesi yanar. Diyalog modu her dosyada çalışır. |
-| M4 | **Audiophile müzik** | FLAC, ALAC, WAV ve AIFF gapless. Bit-perfect DAC ve örnekleme hızı geçişi, sinyal yolu görünümü. R128/ReplayGain loudness. Temel albüm modu. | DSD, müzikal geçişler | A2, A7, L3 | DAC ekranı dosyanın örnekleme hızını gösterir. Albümler kesintisiz çalar. |
-| M5 | **Altyazıda mükemmellik** | SRT, ASS ve PGS ekran çözünürlüğünde render edilir. Altyazı siyah banda taşınır. Otomatik senkron düzeltme. Sistemin altyazı stil profillerine uyulur. | Altyazı üretimi (v2) | P1, P3, I7 | Kaymış bir SRT tek dokunuşla ±100 ms içine hizalanır. |
-| M6 | **Cihazda AI altyazı: PGS OCR ve çeviri** | PGS ve VobSub metne çevrilir, isteğe bağlı olarak Türkçe'ye çevrilir ve çift dilli gösterilir. Tamamen çevrimdışı çalışır. | Konuşmadan altyazı üretimi (v2) | I1, I3 | 2 saatlik bir PGS parçası 2 dakikadan kısa sürede metne çevrilir. Çeviri okunaklı olur. |
+| M2 | **Nit Çekirdeği: tipik beyaz yaklaşık 1200 nit (EN ÖNCELİKLİ)** | Aşağıdaki "M2 ayrıntısı" bölümüne bakın. SDR ve HDR'da beyaz panelin tepe parlaklığına çıkar. Varsayılan mod "Nit"; isteyene "Referans" modu (Apple'ın native HDR/DV yolu, disk neyse o) sunulur. Kontroller SDR'da kalır, gözü almaz. | Parlaklık ve beyaz noktanın kullanıcı tarafından değiştirilmesi (sistem ayarı) | V12, V5, P1 | Aynı SDR film, Apple TV uygulamasındaki SDR'dan belirgin şekilde parlak görünür. Beyaz yamada ölçülen değer panel tepe değerine yakındır. 2 saatte kare kaybı 0. |
+| M3 | **HDR ve Dolby Vision çözme** | HDR10, HLG ve DV P5/P8 çözülür ve Nit Çekirdeğine verilir. DV P7 → P8.1 dönüşümü yapılır. Referans modunda native EDR/DV yolu kullanılır. HDR rozeti ve teşhis kartı. | HDR10+ (v1.1) | V1, V2, V5, S2 | P5, P7 ve P8 test dosyaları iki modda da doğru renkle oynar. Referans modunda DV tetiklenir. |
+| M4 | **Rotaya göre sinema sesi** | E-AC-3 JOC'un native Atmos'a verilmesi. TrueHD ve DTS-HD MA'nın 7.1'e açılıp uzamsal sese aktarılması. Merkez kanal diyalog yükseltme ve gece modu. Bluetooth gecikme telafisi. | AUSoundIsolation ile stereo diyalog (v1.1) | A1, A3, A4, A5 (yalnızca merkez kanal) | AirPods'ta Atmos/uzamsal göstergesi yanar. Diyalog modu her dosyada çalışır. |
+| M5 | **Audiophile müzik** | FLAC, ALAC, WAV ve AIFF gapless. Bit-perfect DAC ve örnekleme hızı geçişi, sinyal yolu görünümü. R128/ReplayGain loudness. Temel albüm modu. | DSD, müzikal geçişler | A2, A7, L3 | DAC ekranı dosyanın örnekleme hızını gösterir. Albümler kesintisiz çalar. |
+| M6 | **Gömülü altyazı** (rev. 2'de sadeleşti) | MKV içindeki PGS, SRT ve ASS parçaları ekran çözünürlüğünde, doğru zamanlamayla render edilir. Görüntüye yakılmış altyazıda ek iş gerekmez. Altyazı parlaklığı videodan ayrı ayarlanabilir. | OCR, çeviri, otomatik senkron (kapsam dışı) | P3 | Test setindeki tüm gömülü altyazı parçaları doğru konum ve zamanlamayla görünür. |
 | M7 | **Kaynaklar ve kütüphane** | Files/yerel, SMB, Jellyfin ve Plex. Bonjour ile keşif. TMDB meta verisi. Kalite rozetleri ve kalite rafı. | DLNA (multicast onayına bağlı), Trakt (v1.1) | S4, L1, L2 | Yeni bir NAS üç dokunuşta kütüphaneye eklenir. |
-| M8 | **Sıfır ayar deneyimi** | Akıllı parça seçimi. Kaldığın yerden devam ve iCloud senkronu. OLED arayüzü ve yanma koruması. Now Playing framework. Isıyı gözeten kalite yöneticisi. Katmanlı (basit/uzman) arayüz. | — | S1, S5, S6, S7, P1, P2, V6 | İlk açılışta hiçbir ayara dokunmadan "doğru" oynatma. |
+| M8 | **Sıfır ayar deneyimi** | Akıllı parça seçimi. Kaldığın yerden devam ve iCloud senkronu. OLED arayüzü ve yanma koruması (yalnızca arayüz öğeleri; parlaklık düşürülmez). Oynatma sırasında otomatik kilit kapalı. Now Playing framework. Isıyı gözeten kalite yöneticisi. Katmanlı (basit/uzman) arayüz. | — | S1, S5, S6, S7, P1, P2, V6 | İlk açılışta hiçbir ayara dokunmadan "doğru" oynatma. |
+
+### 5.1.1 M2 ayrıntısı: Nit Çekirdeği
+
+**Amaç:** Kullanıcının isteği şu: SDR'da da HDR'da da tipik beyaz, panelin HDR tepe parlaklığında (iPhone 11 Pro'da yaklaşık 1200 nit) görünsün.
+
+**Hat:**
+
+```
+VideoToolbox (HEVC/H.264 donanım çözme) ─► CVPixelBuffer (10/8-bit YCbCr)
+   ─► CVMetalTextureCache ─► Nit Çekirdeği (Metal)
+        1. YCbCr → RGB (BT.709 / BT.2020, limited/full aralık)
+        2. EOTF: SDR → BT.1886 · HDR10/DV → PQ · HLG → HLG + OOTF
+        3. Gamut: 709/2020 → Display P3 (doğru dönüşüm, doygunluk şişirmesi yok)
+        4. Parlaklık eğrisi (aşağıda)
+        5. Ekran çözünürlüğüne ölçekleme (2436×1125)
+   ─► CAMetalLayer (RGBA16Float, extendedLinearDisplayP3,
+                    wantsExtendedDynamicRangeContent = true)
+```
+
+**Temel fikir:** EDR değer uzayında `1.0`, o anki SDR beyazıdır. Panelin tepe noktası ise `1.0 × currentEDRHeadroom` değerine karşılık gelir. Çekirdek beyazı doğrudan headroom'a eşler. Böylece kod nit değerini bilmek zorunda kalmaz ve parlaklık kaydırıcısı nerede olursa olsun beyaz panelin tepesine çıkar.
+
+| İçerik | Eğri |
+|---|---|
+| **SDR** | `çıkış = lineer_değer × H`. `H = currentEDRHeadroom`, her karede okunur. Tüm görüntü aynı oranda parlar. Kontrast oranı korunur (OLED siyahı 0 kalır). |
+| **HDR10 / DV / HLG: "Maksimum" (varsayılan)** | Referans beyaz (yaklaşık 203 nit ya da sahne analizi) `H`'ye eşlenir. Bunun üstündeki vurgular dar bir yumuşak dirsekle sıkıştırılır. Bedeli: beyaz zaten tepedeyse parlak vurgular (güneş, lamba) beyazla aynı seviyeye yaklaşır ve "HDR patlaması" azalır. |
+| **HDR: "Dengeli" (seçenek)** | Referans beyaz `H` değerinin yaklaşık %75–80'ine çekilir. Kalan alan vurgulara ayrılır. Daha az parlak, daha "HDR" bir görüntü verir. |
+| **DV** | P8.1 ve P7'den dönüşen P8.1'in taban katmanı PQ/BT.2020 olduğu için aynı yoldan geçer. P5 (IPTPQc2) için çekirdeğe reshaping ve matris adımı eklenir. RPU'daki dinamik meta veri ton eğrisini besler. |
+
+**Kurallar:**
+- Arayüz (kontroller, rozetler) SDR'da (`1.0`) kalır; yalnızca video ve isteğe bağlı olarak altyazı yükseltilir.
+- `currentEDRHeadroom` sistem tarafından düşürülürse (ısı, ortam ışığı) eğri birkaç kare içinde yumuşakça uyum sağlar. Ani parlaklık sıçraması ya da kırpma olmaz.
+- "Referans" modu her zaman bir dokunuş uzaklıkta: Apple'ın native HDR/DV yolu, "disk neyse o".
+
+**Uygulamanın aşamayacağı fiziksel sınırlar** (dürüstçe yazılmalı, spike'ta ölçülmeli):
+- **ABL (otomatik parlaklık sınırlama):** OLED, ekranın büyük bölümü beyazken tepe parlaklığı sürdüremez. Tipik film sahnelerinde beyaz alanlar 1200 nite yaklaşabilir; tam beyaz bir ekranda değer daha düşük kalır **[ölçülmeli]**.
+- **Isı:** Uzun süre tepe parlaklıkta kalmak cihazı ısıtır ve iOS headroom'u kısar. Uygulama bunu engelleyemez; yalnızca yumuşakça uyum sağlar.
+- **Düşük Güç Modu** EDR'yi kapatır.
+- **Pil ve OLED aşınması** artar. Bu kullanıcının bilinçli tercihi.
+- PiP ve AirPlay'de Nit modunun davranışı ayrıca çözülmeli (AS-31).
 
 ### 5.2 Yol haritası
 
@@ -284,11 +332,24 @@ Not: V2 (DV P7) ve A3 (native Atmos) W×F'de 15 alıyor. Yine de MVP'deler, çü
 
 Her soru "şu çalışır mı?" biçiminde yazıldı ve ölçülebilir bir başarı ölçütü taşıyor. Soru kimlikleri `AS-n` biçimindedir; fikir kimlikleriyle (S1, V2…) karışmasın diye böyle seçildi. Önerilen öncelik: AS-1, AS-9, AS-11, AS-14, AS-15 ve AS-21 ilk iki haftadaki spike'larda ele alınmalı.
 
+**Rev. 2:** AS-14, AS-18 ve AS-19 iptal edildi (OCR, çeviri ve otomatik senkron kapsam dışı). Nit Çekirdeği soruları (AS-26–AS-31) **en yüksek öncelikte**.
+
+### 6.0 Nit Çekirdeği (en öncelikli)
+
+| # | Soru | Başarı ölçütü | İlgili |
+|---|---|---|---|
+| AS-26 | iOS 27'de iPhone 11 Pro'da tam ekran bir CAMetalLayer'a SDR değerleri `× currentEDRHeadroom` ile yazıldığında sistem headroom'u gerçekten veriyor mu? Panel tepe parlaklığına çıkıyor mu? Maksimum, orta ve düşük parlaklık kaydırıcısında `potentialEDRHeadroom` ve `currentEDRHeadroom` değerleri ne? | Headroom kayıtları alınır. Beyaz yama, Apple'ın kendi HDR test videosundaki tepe beyazıyla yan yana aynı parlaklıkta görünür (ışıkölçer varsa nit cinsinden ölçülür). | M2 |
+| AS-27 | ABL: Ekranın %10, %25, %50 ve %100'ünü kaplayan beyaz yamalarda gerçek parlaklık ne? Tipik film sahnesinde beyazlar ≥ 1000 nit mi? | Işıkölçer ya da lüksmetreyle bağıl ölçüm tablosu. | M2 |
+| AS-28 | Nit modunda 2 saatlik oynatmada `currentEDRHeadroom` ve `thermalState` nasıl değişiyor? Pil tüketimi Referans moduna göre ne kadar fazla? | Dakika dakika kayıt. Headroom düşüşünde görünür sıçrama 0. Pil farkı raporlanır. | M2, M8 |
+| AS-29 | Çekirdeğin maliyeti: 4K HEVC 10-bit kare → 2436×1125 RGBA16F (renk, EOTF, gamut, eğri ve ölçekleme) A13 GPU'da **< 3 ms/kare** sürer mi? | Instruments GPU ölçümü. 60 Hz'de kare kaybı 0. | M2, M1 |
+| AS-30 | DV P5 (IPTPQc2 reshaping) ve P8.1 RPU'su Metal çekirdeğinde Referans moduyla **renk olarak eşleşiyor** mu (parlaklık farkı hariç)? | ΔE karşılaştırması ya da yan yana görsel test. Yeşil/mor renk kayması 0. | M2, M3 |
+| AS-31 | Nit modunda PiP (AVSampleBufferDisplayLayer ister), AirPlay ve ekran kaydı nasıl davranır? Gerekirse bu durumlarda Referans moduna geçilir mi? | Her senaryo için tanımlı ve sorunsuz davranış. | M2, M8 |
+
 ### 6.1 Video
 
 | # | Soru | Başarı ölçütü | İlgili |
 |---|---|---|---|
-| AS-1 | MKV'den demux edilen DV P8.1 HEVC örnekleri, dvcC'li `CMFormatDescription` ile beslendiğinde, iPhone 11 Pro'da AVSampleBufferDisplayLayer (ya da iOS 27 `Receiver`) üzerinden **gerçek Dolby Vision modunu** tetikler mi? | Aynı içeriğin MP4 remux'u AVPlayer'da nasıl görünüyorsa onunla birebir aynı görünür (yan yana ekran ölçümü). DV moduna geçiş doğrulanabilir. | V1, M2 |
+| AS-1 | MKV'den demux edilen DV P8.1 HEVC örnekleri, dvcC'li `CMFormatDescription` ile beslendiğinde, iPhone 11 Pro'da AVSampleBufferDisplayLayer (ya da iOS 27 `Receiver`) üzerinden **gerçek Dolby Vision modunu** tetikler mi? | Aynı içeriğin MP4 remux'u AVPlayer'da nasıl görünüyorsa onunla birebir aynı görünür (yan yana ekran ölçümü). DV moduna geçiş doğrulanabilir. | V1, M3 |
 | AS-2 | P7'nin (MEL ve FEL) RPU'sunu P8.1'e çevirme işi 4K24 içerikte **kare başına < 2 ms CPU** ile gerçek zamanlı yapılabilir mi? | 2 saatlik bir filmde kare kaybı 0. Sonuç AS-1 kriterini karşılar. | V2 |
 | AS-3 | 4K HEVC Main10 remux (ortalama 60–80 Mbps, tepe noktası > 100 Mbps), SMB üzerinden Wi-Fi 6 ile kesintisiz akar mı? | 2 saatte 0 takılma. Sarma (seek) sonrası < 1,5 sn'de oynatma. | M1, M7 |
 | AS-4 | Ekran çözünürlüğüne indirgenmiş karede (2436×1125) Metal ile dinamik ton eşleme yapmak **< 4 ms/kare** sürer ve pile etkisi < %10 olur mu? | Instruments ölçümü; 1 saatlik pil farkı. | V3 |
@@ -311,19 +372,19 @@ Her soru "şu çalışır mı?" biçiminde yazıldı ve ölçülebilir bir başa
 
 | # | Soru | Başarı ölçütü | İlgili |
 |---|---|---|---|
-| AS-14 | Vision OCR, PGS altyazıda **karakter doğruluğu ≥ %98** verir mi (İngilizce ve Türkçe)? Türkçe karakterler (ı, ğ, ş, İ) doğru okunur mu? | Elle doğrulanmış 500 satırlık set. 2 saatlik bir filmin OCR'ı < 2 dk sürer. | I1 |
+| AS-14 | **[İPTAL, rev. 2]** Vision OCR, PGS altyazıda **karakter doğruluğu ≥ %98** verir mi (İngilizce ve Türkçe)? Türkçe karakterler (ı, ğ, ş, İ) doğru okunur mu? | Elle doğrulanmış 500 satırlık set. 2 saatlik bir filmin OCR'ı < 2 dk sürer. | I1 |
 | AS-15 | `com.apple.developer.background-tasks.continued-processing.inference` entitlement'ı ücretli geliştirici hesabıyla development profile'a **eklenebilir** mi? A13'te arka plan ANE kısıtı uygulanıyor mu? | Profilde entitlement görünür. Arka planda Core ML ANE çağrısı başarılı olur ya da belgelenmiş bir hata verir. | Kural 2.3/2 |
 | AS-16 | Core AI A13'te **çalışıyor mu**? Küçük bir modelin (< 50 MB) ilk specialization süresi < 30 sn mi? ANE kullanılıyor mu? | `ComputeUnitKind.availableKinds` içinde `neuralEngine` var. Instruments'ta Core AI izi görünür. | Kural 2.3/1 |
 | AS-17 | Music Understanding A13'te çalışır mı? 4 dakikalık bir parçanın analizi **< 10 sn** sürer mi? | `analyze(for: [.loudness, .rhythm])` süresi ölçülür. | A7, A8 |
-| AS-18 | Translation EN→TR, A13'te çevrimdışı olarak **satır başına < 300 ms** ile çalışır mı? 1.500 satırlık bir altyazının toplu çevirisi < 3 dk sürer mi? | `translate(batch:)` ölçümü ve okunabilirlik değerlendirmesi. | I3 |
-| AS-19 | Sound Analysis (`speech` sınıfı) ya da VAD ile altyazı senkronu **±100 ms** doğrulukla otomatik hizalanabilir mi? | Bilinen kayması olan 10 SRT dosyasının ≥ 9'u düzelir. | I7 |
+| AS-18 | **[İPTAL, rev. 2]** Translation EN→TR, A13'te çevrimdışı olarak **satır başına < 300 ms** ile çalışır mı? 1.500 satırlık bir altyazının toplu çevirisi < 3 dk sürer mi? | `translate(batch:)` ölçümü ve okunabilirlik değerlendirmesi. | I3 |
+| AS-19 | **[İPTAL, rev. 2]** Sound Analysis (`speech` sınıfı) ya da VAD ile altyazı senkronu **±100 ms** doğrulukla otomatik hizalanabilir mi? | Bilinen kayması olan 10 SRT dosyasının ≥ 9'u düzelir. | I7 |
 | AS-20 | DictationTranscriber A13'te Türkçe (tr-TR) ve İngilizce için **çevrimdışı** çalışır mı? Kelime hata oranı (WER) < %15 olur mu? | Çevrimdışı mod ve WER ölçümü. Whisper (Core ML) karşılaştırması. | I2 |
 
 ### 6.4 Platform ve derleme
 
 | # | Soru | Başarı ölçütü | İlgili |
 |---|---|---|---|
-| AS-21 | `increased-memory-limit` ile iPhone 11 Pro'da kullanılabilir bellek ne olur (`os_proc_available_memory`)? 4K demux tamponu, OCR ve çeviri modelleri aynı anda sığar mı? | Gerçek limit ölçülür. Tepe kullanım < limitin %70'i. | M1, M6 |
+| AS-21 | `increased-memory-limit` ile iPhone 11 Pro'da kullanılabilir bellek ne olur (`os_proc_available_memory`)? 4K demux tamponu, Nit Çekirdeği dokuları ve ses zinciri aynı anda sığar mı? | Gerçek limit ölçülür. Tepe kullanım < limitin %70'i. | M1, M2 |
 | AS-22 | Özel hatta (AVSampleBufferAudioRenderer) **Now Playing framework** (iOS 27) ile kilit ekranı kontrolleri ve kesinti sonrası `ResumptionRecommendation` sorunsuz çalışır mı? | Arama, alarm ve Siri kesintisi senaryolarının hepsinde doğru davranış. | S7, M8 |
 | AS-23 | SMB okuma hızı libsmb2 (ya da benzeri) ile Files/File Provider yolu arasında karşılaştırıldığında **≥ 20 MB/s** mi? | Aynı NAS üzerinde iperf benzeri ölçüm. | M7 |
 | AS-24 | GitHub Actions macOS runner'ında FFmpeg (yalnızca LGPL bileşenleri), dav1d ve libass derlemesi **önbellekle < 15 dk** sürer mi? | CI süre ölçümü ve dakika maliyeti tahmini. | Derleme |
@@ -335,13 +396,13 @@ Her soru "şu çalışır mı?" biçiminde yazıldı ve ölçülebilir bir başa
 
 | Sıra | Varsayım | Neden riskli | Çürürse ne olur | Spike |
 |---|---|---|---|---|
+| **0 (rev. 2)** | **Nit Çekirdeği** iPhone 11 Pro + iOS 27'de SDR ve HDR'da beyazı panel tepesine (yaklaşık 1200 nit) çıkarabilir ve bunu film boyunca termal kısmaya takılmadan, renk doğruluğunu bozmadan sürdürebilir. | EDR API'si belgeli. Ancak gerçek nit değerini ABL, ısı ve sistem politikası belirliyor; bu ölçülmeden bilinemez. | Ürünün 1 numaralı vaadi "mümkün olan en parlak" düzeyine iner. Çekirdek yine çalışır, ama sabit 1200 nit garanti edilemez. | AS-26–AS-29 |
 | **1** | MKV'den çıkarılan DV P8.1 ve P7'den dönüştürülmüş P8.1 içerik, iPhone 11 Pro'da özel hatla **gerçek Dolby Vision modunu** tetikler. | Apple bu yolu belgelemiyor. Infuse bile P7'de HDR10'a düşüyor. | Ürün vaadinin "gerçek DV" ayağı zayıflar. HDR10 + dinamik ton eşleme (V3) öne çekilir. | AS-1, AS-2 |
 | **2** | iOS 27 ses yığını özel motorda **E-AC-3 JOC'u native Atmos olarak** render eder ve USB DAC'ta **bit-perfect ile örnekleme hızı geçişine** izin verir. | İkisi de belgelenmemiş davranışlara dayanıyor. Rakiplerde de sınırlı. | "Gerçek Atmos" ve "bit-perfect" iddiaları "en iyi çaba" düzeyine iner. | AS-9, AS-11 |
-| **3** | A13 ve 4 GB RAM, 4K HDR remux çözme, Metal ton eşleme ve AI (OCR, çeviri) işlerini **termal kısmaya uğramadan** birlikte kaldırır. iOS 27'nin yeni ML API'lerine bel bağlamadan da AI vaadi karşılanır. | Core AI, Music Understanding ve VTFrameProcessor'ın A13 desteği belgelenmemiş. Arka planda ANE kısıtlanmış. SpeechTranscriber yok. | AI özellikleri ön planda, "hazırlık" adımı olarak çalışır. Bazı özellikler v2'ye kayar. | AS-4, AS-14, AS-15, AS-16, AS-21 |
+| **3** | A13 ve 4 GB RAM, 4K HDR remux çözme, Nit Çekirdeği ve AI işlerini **termal kısmaya uğramadan** birlikte kaldırır. iOS 27'nin yeni ML API'lerine bel bağlamadan da AI vaadi karşılanır. | Core AI, Music Understanding ve VTFrameProcessor'ın A13 desteği belgelenmemiş. Arka planda ANE kısıtlanmış. SpeechTranscriber yok. | AI özellikleri ön planda, "hazırlık" adımı olarak çalışır. Bazı özellikler v2'ye kayar. | AS-4, AS-15, AS-16, AS-21, AS-28 |
 
 Diğer önemli riskler:
 - Dolby, DTS ve FFmpeg lisans riskleri (ajan 2 karar kaydı).
-- Vision'ın Türkçe OCR desteği (AS-14).
 - macOS runner dakika maliyeti (AS-24).
 - Çok noktaya yayın entitlement onayı (fikir S4, DLNA).
 

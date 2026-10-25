@@ -9,6 +9,8 @@ iPhone 11 Pro için sideload edilen, **flagship seviyesinde bir medya oynatıcı
 - **Basit:** İlk açılıştan itibaren sıfır ayarla doğru çalışır.
 - **Çok yetenekli:** Uzman kullanıcı için derin kontrol sunar.
 - **Kalite:** Cihazın verebileceği en yüksek görüntü ve ses kalitesi. HDR/EDR, renk doğruluğu ve bit-perfect'e en yakın ses zinciri.
+- **1 numaralı özellik, Nit Çekirdeği:** SDR'da da HDR'da da tipik beyaz, panelin HDR tepe parlaklığında (yaklaşık 1200 nit) görünür. Bunu kendi Metal çekirdeğimiz EDR ile yapar. Uygulama parlaklığı hiçbir koşulda kendiliğinden düşürmez. Ayrıntılar `docs/01-konsept.md` içindeki M2'de.
+- **Kapsam dışı (kullanıcı kararı):** Altyazı OCR'ı, çeviri ve otomatik senkron. Altyazılar videoyla birlikte, gömülü olarak gelir.
 - **AI:** A13 Neural Engine üzerinde, cihaz içinde çalışan özellikler.
 - **Apple framework'leri:** Mümkün olan her yerde native API kullanılır. Üçüncü parti yalnızca gerçek bir boşluğu dolduruyorsa eklenir.
 
