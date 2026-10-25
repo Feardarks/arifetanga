@@ -592,6 +592,7 @@ stateDiagram-v2
 | 4 | Müzikli sahne | Arayüzde değişiklik yok. | Gevşeme (r) Bilgi > Ses'te canlı görünür: "Müzik algılandı · diyalog gevşetildi (%80)". |
 | 5 | Ekran kilitlendi ya da uygulama arka plana geçti | Arayüz yok. | Yöntem F1'e (DSP) geçer. Ön plana dönünce Bilgi'de "Arka planda DSP yöntemi kullanıldı" satırı görünür. |
 | 6 | Isı `.serious` | Arayüz yok. | F1'e geçilir. Bilgi'de neden yazar. |
+| 6b | Oynatma hızı 1× değil | Arayüz yok. | Gerçek zamandaki yük hızla çarpılır. 2×'te AUSoundIsolation bütçesi (≤ %40 P çekirdeği) aşılırsa 200 ms çapraz geçişle F1'e geçilir (02-cozum §4.10, `dialogEngineChanged`). Bilgi: "Diyalog 2 · DSP yöntemi (hız 2× nedeniyle)". Kademe ve düğme değişmez. |
 | 7 | Basılı tutma | Ses paneli açılır, Diyalog bölümüne kaydırılmış olarak. | Paneldeki segment: Kapalı · 1 · 2 · 3. |
 
 **Kalıcılık:** Her filmin başında Diyalog, Ayarlar > Ses > Diyalog varsayılanı değerinden başlar (varsayılanı **Kapalı**). Her filmde diyalog açmak isteyen kullanıcı bu varsayılanı değiştirir.
@@ -613,7 +614,7 @@ Hata metni kuralları: Ne olduğunu söyle, nedenini söyle, yapılabilecek tek 
 | H-07 | Ağ yavaş (tampon > 5 sn) | Oynatıcı HUD | "Ağ yavaş · gereken 18 MB/sn, gelen 9 MB/sn." | — (tampon dolunca kendiliğinden sürer) |
 | H-08 | DV P5 RPU hatası | Oynatıcı HUD | "Dolby Vision meta verisi okunamadı → Referans yoluna geçildi." | — |
 | H-09 | BT.2020 CL ya da bilinmeyen renk sistemi | Oynatıcı HUD | "Renk sistemi Nit'te desteklenmiyor (BT.2020 CL) → Referans." | — |
-| H-10 | Altyazı parçası desteklenmiyor (ör. VobSub) | Altyazı paneli | Satır gri: "VobSub · desteklenmiyor" | — **[ajan 2]** |
+| H-10 | Altyazı parçası desteklenmiyor (ör. DVB teletext). VobSub artık desteklenir (G-07, K-36). | Altyazı paneli, E-07 | Satır gri ve seçilemez: "{Dil} · {biçim} · desteklenmiyor", ör. "Deutsch · Teletext · desteklenmiyor" | — |
 | H-11 | Yerel ağ izni yok | SMB keşif | "Yerel ağ izni kapalı." | [Ayarlar'ı aç] |
 | H-12 | iCloud kapalı | Ayarlar > Senkron | "iCloud'a giriş yapılmamış; ilerleme yalnızca bu cihazda tutuluyor." | — |
 | H-13 | Kimlik doğrulama süresi doldu (Plex/Jellyfin) | Kaynaklar satırı | "Oturumun süresi doldu." | [Yeniden giriş yap] |
@@ -668,12 +669,12 @@ x: 0  44                                                                    768 
 
 | Öğe | Konum (pt) | Boyut | İçerik |
 |---|---|---|---|
-| Başlık adacığı | x 52, y 8 | yükseklik 40, genişlik içeriğe göre (≤ 320) | [Kapat] `xmark` + başlık (headline, tek satır, sonu kesilir) + alt satır (footnote, ikincil): "S1 · B2 · Bitiş 23:41" |
+| Başlık adacığı | x 52, y 8 | yükseklik 40, genişlik içeriğe göre (≤ 320) | [Kapat] `xmark` + başlık (headline, tek satır, sonu kesilir) + alt satır (footnote, ikincil): "S1 · B2 · Bitiş 23:41". Bitiş saati gerçek zamandır: şimdi + kalan süre ÷ hız. |
 | Mod anahtarı (C-05) | sağ küme, y 8 | 40 × 128 | **Nit \| Referans**, tek dokunuş |
 | Format çipi (C-16) | mod anahtarının sağında | 40 × içerik | "DV · Atmos"; dokununca Bilgi paneli |
 | Sistem düğmeleri | sağ uç, x ≤ 760 | 3 × 44 × 40 | PiP `pip.enter`, AirPlay `airplay.audio`, Kilit `lock.fill` |
 | Zaman çizgisi adacığı (C-06) | x 52–760, y 262 | 36 pt | geçen süre, iz, bölüm işaretleri, kalan süre |
-| Oynatma kümesi | x 52, y 306 | 44 × 156 | [−10] `gobackward.10`, [Oynat/Duraklat], [+10] `goforward.10` |
+| Oynatma kümesi | x 52, y 306 | 44 × 156; hız 1× değilken 44 × 212 | [−10] `gobackward.10`, [Oynat/Duraklat], [+10] `goforward.10`; hız 1× değilken sağ uçta **hız rozeti** (C-33, 52 × 44, ör. "1,5×"; §4.15) |
 | Panel düğmeleri | sağa yaslı, x ≤ 760, y 306 | 44 × (5 × 44 + 4 × 4) | Diyalog (kademe noktalı), Ses, Altyazı, Görüntü, Diğer (`ellipsis`) |
 
 **Neden oynatma kümesi ortada değil? (HIG'den sapma, §10'da S-3):**
@@ -713,8 +714,9 @@ x: 0  44                                                                    768 
 └───────────────────────────────────────┘ 812
 ```
 
-- Dikeyde video dikey ortadadır. Bir panel açılınca video **üste kayar** (y = 52) ve panel aşağıdan gelir. Böylece panel görüntünün üstüne binmez (§4.3).
-- Dikeyde oynatma kümesi alttadır ve ortalanmıştır; tek elle başparmak bölgesindedir (§4.14).
+- Dikeyde video dikey ortadadır. Bir panel açılınca video **üste kayar** (y = 52) ve panel aşağıdan gelir. Böylece panel görüntünün üstüne binmez (§4.3). Kayma yalnızca katman konum dönüşümüyle yapılır; drawable tam ekran olduğu için değişmez (G-18, K-33).
+- Dikeyde oynatma kümesi alttadır ve ortalanmıştır; tek elle başparmak bölgesindedir (§4.14). Hız 1× değilken hız rozeti (C-33) aynı satırda sağda durur: x 307–359, y 660–704. Küme ortalı kalır; rozet kümeyi kaydırmaz.
+- **Döndürme:** Yatay ↔ dikey geçişte eski içerik animasyon boyunca ölçeklenir. Yeni drawable son kare yeniden çizilerek aynı işlemde sunulur; siyah kare olmaz (G-18, 02-cozum §3.9).
 - **Yönelim:** Oynatıcı ters dikey dışında tüm yönleri destekler ve cihazın o anki yönünde açılır. Dikey yön kilidi açıksa ve video yataysa, dikey yerleşimde üst şeritte bir [Yatay] düğmesi görünür; dokununca `requestGeometryUpdate` ile yataya geçilir.
 
 ### 4.2 Hareketler
@@ -728,6 +730,8 @@ x: 0  44                                                                    768 
 | Dikey aşağı kaydırma (≥ 120 pt) | Video, kontroller görünürken | Oynatıcıyı kapat | Etkileşimli: video sürükledikçe %90'a küçülür. Bırakınca eşik altındaysa geri döner. Kontroller gizliyken etkin değildir; yanlışlıkla kapatmayı önler. |
 | Yatay sürükleme | Zaman çizgisi adacığı | Sarma | §4.3, C-06 |
 | Basılı tutma | Diyalog düğmesi | Ses panelini Diyalog bölümünde açar | — |
+| Basılı tutma | Altyazı düğmesi | Altyazı panelini **Gecikme** bölümünde, odak kipinde açar (§4.16) | Altyazı gecikmesinin hızlı erişim yolu. Seçili altyazı yoksa paneli parça listesinde açar. |
+| Dokunma | Hız rozeti (yalnızca hız 1× değilken) | Diğer panelini **Oynatma hızı** bölümünde açar (§4.15) | Rozete dokunmak hızı değiştirmez; kazara sıfırlama olmaz. |
 | Basılı tutma | Mod anahtarı | Görüntü panelini açar | — |
 | Basılı tutma | Boost kaydırıcısı | "Bu film için hatırla" satırını açar | — |
 | İki parmakla çift dokunuş (VoiceOver Magic Tap) | — | Oynat/Duraklat | §7 |
@@ -735,7 +739,11 @@ x: 0  44                                                                    768 
 **Bilinçli olarak eklenmeyen hareketler:**
 - **Parlaklık için dikey kaydırma yok.** Parlaklığa yalnızca Tepe Kilidi dokunur (İ-2). İkinci bir parlaklık kontrolü kullanıcının kafasını karıştırır ve Tepe Kilidi mantığıyla çatışır.
 - **Ses düzeyi için kaydırma yok.** Sistem ses düzeyini ayarlamanın public API'si yok. Donanım düğmeleri yeterli.
-- **Hız (ör. basılı tutunca 2×) yok.** Teknik çözümde tanımlı değil; ayrıca bit-perfect ve ses zinciriyle etkileşimi çözülmedi.
+- **"Basılı tutunca 2×" yok.** Oynatma hızı rev. 6 ile MVP'de (§4.15), ama yalnızca panelden kalıcı bir seçim olarak. Gerekçeler:
+  1. Native Atmos 1× dışında PCM'e çözülür ve 1×'e dönünce 2 sn sonra geri geçilir (02-cozum §4.10). Geçici bir hareket her basışta bu iki geçişi tetikler.
+  2. 2×'te Diyalog yöntemi F1'e geçebilir (§3.5, adım 6b). Aynı geçiş zinciri her basışta yinelenir.
+  3. Videoya basılı tutma yatakta ve cepte kazara olur. Kilit modu da bunu engellemek için var (§4.10).
+- **Altyazı gecikmesi için video hareketi yok** (ör. iki parmakla yatay kaydırma). Kıstırma ve sarma hareketleriyle çakışır. Hızlı erişim, Altyazı düğmesine basılı tutmak ve donanım klavyesinde G/H tuşlarıdır (§4.16, §7.7).
 
 Hareket tanıyıcılar UIKit'te kurulur (§9.6): tek ve çift dokunuş ayrımı `require(toFail:)` ile deterministik yapılır.
 
@@ -770,6 +778,7 @@ Hareket tanıyıcılar UIKit'te kurulur (§9.6): tek ve çift dokunuş ayrımı 
 | İçerik | Dikey kaydırılabilir liste; sıra: en sık kullanılan üstte, **Uzman** en altta | Aynı |
 
 - **Sürükleme odağı:** Görüntüyü etkileyen bir kaydırıcı sürüklenirken (altyazı parlaklığı, beyaz hedefi) panelin diğer satırları 150 ms'de opaklığı 0'a iner ve yalnızca o satır kalır. Böylece kullanıcı etkiyi görüntünün daha geniş kısmında görür. Bırakınca satırlar geri gelir.
+- **Odak kipi (yalnızca yatay, altyazı gecikmesi):** Sürükleme odağı, opak panel zemini yerinde kaldığı için altyazının sağ yarısını örter. Gecikme ayarında kullanıcının altyazıyı tam görmesi gerekir. Bu yüzden Gecikme bölümüne dokunulunca panel **küçülür:** yalnızca gecikme satırını içeren 340 × 112 pt'lik bir adacık olarak sağ üstte kalır (y 8–120). Alt yarı ve altyazı alanı boşalır. [Bitti] ya da 4 sn etkileşimsizlik paneli tam haline döndürür (`motion.standard`; Reduce Motion'da çapraz geçiş). Dikeyde gerekmez: video panelin üstündedir. Ayrıntı §4.16.
 - **Neden sistem sayfası (sheet) ya da menü değil?** Sistem sayfaları arka planı karartır (İ-1). Ayrıca iOS 26+ sistem menüleri ve popover'lar Liquid Glass kullanır; bu, arkadaki EDR videoyu her karede yeniden örnekler (İ-6) ve camın içinde 8× parlaklığında görüntü parçaları belirebilir (P-4). Gerekçe §10, S-2 ve S-5'te.
 
 **Zaman çizgisi (C-06):**
@@ -778,24 +787,29 @@ Hareket tanıyıcılar UIKit'te kurulur (§9.6): tek ve çift dokunuş ayrımı 
 - **Sürükleme:** Göreli sürükleme yapılır; parmağın değdiği yere atlanmaz. Bu, kazara atlamayı önler.
 - **İnce sarma:** Parmak izden yukarı uzaklaştıkça hız düşer: 0–40 pt'de 1×, 40–90 pt'de ½×, 90 pt'den sonra ¼×. Etiket: "Yarım hızda sarma", "Dörtte bir hızda sarma". iOS'un standart davranışıdır.
 - **Balon:** Parmağın üstünde "1:02:13 · Bölüm 7: Arrakis". Bölüm sınırı geçilirken haptik `.selection`.
-- **Sarma bırakınca yapılır.** MVP'de sürükleme sırasında canlı kare önizlemesi yoktur; teknik çözümde tanımlı değil ve SMB'de sarma 1,5 sn'ye kadar sürebilir **[ajan 2: önizleme görselleri v1.1]**.
+- **Saat hızı:** Sürükleme başlayınca arayüz `setClockRate(.scrubbing)` gönderir ve saat akışı 60 Hz'e çıkar. Bırakınca `.normal` (1 Hz) gönderilir (02-cozum §14 G-04).
+- **Sarma bırakınca yapılır.** MVP'de sürükleme sırasında canlı kare önizlemesi yoktur; SMB'de sarma 1,5 sn'ye kadar sürebilir. **Önizleme görselleri v1.1'dedir** (G-11): Jellyfin 10.9+ trickplay karoları ve yerelde 10 sn aralıklı IDR karelerinden üretilen ≈ 240 px karolar. v1.1'de balonun üstüne 16:9 küçük resim girer; MVP yerleşimi bunun için yer bırakmaz, balon yalnızca yukarı büyür.
+- **Zaman ve hız:** Geçen ve kalan süre medya zamanıdır; hız 1× değilken de öyle kalır. Gerçek zamanlı bitiş yalnızca başlık adacığındaki "Bitiş" saatindedir.
 
 **Sonraki bölüm kartı (C-24):** Dizide dosya bitmeden 10 sn önce, ya da jenerik bölümü işaretliyse orada (bölüm bilgisi MKV'de varsa), sağ altta bir adacık belirir: "Sonraki · B3: Başlık" + [Oynat] (çevresinde 10 sn geri sayım halkası) + [İptal]. Kart gerçek videonun üstünde küçük kalır; görüntü küçültülmez.
 
 **Tampon göstergesi (C-25):** Ortada 44 pt'lik opak daire ve içinde dönen gösterge. Yalnızca 300 ms'yi aşan beklemede belirir. Bekleme 5 sn'yi geçerse HUD-13 eklenir.
 
-**Diğer paneli (⋯):**
+**Diğer paneli (⋯), E-35.** Sıra yukarıdan aşağıya:
+- **Oynatma hızı:** 7 kademe, sıfırlama ve notlar. Ayrıntı ve tel kafes §4.15.
 - **Bölümler:** Bölüm listesi (ad + zaman); dokununca o bölüme sarılır. Küçük resim yok (MVP).
 - **Başlıklar:** Yalnızca ISO/BDMV'de. Süre ve playlist kimliğiyle; ana başlıkta "Ana başlık" etiketi.
 - **Görüntü oranı:** Sığdır / Doldur.
 - **Bilgi:** Bilgi panelini açar.
 - **Teşhisi paylaş:** Bilgi metni ve son 10 dakikanın telemetrisi (CSV) paylaşım sayfasıyla gönderilir. Sistem paylaşım sayfası burada kabul edilebilir, çünkü kısa süreli bir eylemdir ve video duraklatılarak açılır.
+- **Uzman:** "Bu dosyada hızı hatırla" (§4.15).
 
 ### 4.4 Görüntü: Nit | Referans, Görüntü paneli ve uzman araçları
 
 **Mod anahtarı (C-05), üst şeritte.** İki segment: **Nit** ve **Referans**. Tek dokunuşla geçilir (P-3). Basılı tutunca Görüntü paneli açılır.
 - Geçiş motorun işidir: ≤ 500 ms, siyah kare yok, ses kesilmez (02-cozum §3.11). Arayüz yalnızca segmenti hemen değiştirir. Geçiş sürerken segmentin altında 2 pt'lik ince bir ilerleme çizgisi akar.
-- Nit'in kullanılamadığı durumlarda (PiP, dış ekran, DV P5 RPU hatası, BT.2020 CL) anahtar "Referans"ta görünür ve "Nit" segmenti devre dışıdır. Nedeni, segmente basılı tutunca ya da Görüntü panelinde yazar.
+- Nit'in kullanılamadığı durumlarda (PiP, dış ekran, DV P5 RPU hatası, BT.2020 CL) anahtar "Referans"ta görünür ve "Nit" segmenti devre dışıdır. Kaynak `DisplaySnapshot.nitUnavailableReason` (`AutoReferenceReason`: `.pictureInPicture`, `.externalDisplay`, `.dolbyVisionRPUError`, `.unsupportedColorSystem`). Nedeni, segmente basılı tutunca ya da Görüntü panelinde yazar.
+- Geçiş çizgisi `displayModeTransition(.started)` ile başlar, `.finished` ile durur (02-cozum §14 G-04).
 
 **E-31 Görüntü paneli (yatay, 340 pt):**
 
@@ -825,10 +839,12 @@ Hareket tanıyıcılar UIKit'te kurulur (§9.6): tek ve çift dokunuş ayrımı 
 │ Bant haritası                           [  ○ ]     │
 │ Titreşim         [Kapalı | İnce | Orta]            │
 │ Referans beyaz   [Sahne bazlı | 203 nit | Elle]    │
+│ Sapma sınırı     0 ━━━━━●━━━━━ 1 stop     0,5      │  yalnızca Sahne bazlı
+│ Elle beyaz       100 ━━━●━━━━━━━ 300 nit  150      │  yalnızca Elle
 │ Beyaz hedefi     0,90 ━━━━━━━●━━━ 0,98     0,95    │  yalnızca Maksimum
 │ SDR gama         [Otomatik | 2,2 | 2,4]            │  yalnızca SDR kaynakta
 │ Kesin kadans                            [  ○ ]     │  yalnızca 23,976 içerikte
-│ İçerik %0,1 hızlı oynar; ses perdesi 1,7 sent kayar│
+│ İçerik %0,1 hızlı oynar; ses perdesi 1,7 sent kayar│  1× dışında devre dışı (§4.15)
 ╰────────────────────────────────────────────────────╯
 ```
 
@@ -840,7 +856,10 @@ Hareket tanıyıcılar UIKit'te kurulur (§9.6): tek ve çift dokunuş ayrımı 
 | Nit + HDR Maksimum | SDR gama | "Beyaz ≈ tepe. Parlak vurgular beyaza yaklaşır." |
 | Nit + HDR Dengeli | SDR gama, Beyaz hedefi | "Beyaz tepenin ≈ %75'inde. Vurgulara yer kalır." |
 | Referans | HDR eğrisi, Tepe Kilidi, Şu an'daki sahne satırı, Uzman'daki Nit satırları | "Disk neyse o: sistemin HDR ve Dolby Vision işleyişi. Eğri ve Tepe Kilidi yalnızca Nit'te." |
-| 10-bit kaynak, bant dedektörü tetiklenmedi | A/B ve Bant haritası satırları | Temiz Nit satırında: "Bu kaynakta bant düzeltmesi gerekmiyor (10-bit)." |
+| 10-bit kaynak, bant dedektörü tetiklenmedi (`cleanNitActive == false`) | A/B ve Bant haritası satırları | Temiz Nit satırında: "Bu kaynakta bant düzeltmesi gerekmiyor (10-bit)." Bit derinliği `TechProfile`'dan okunur. |
+| Referans beyaz = Sabit 203 ya da Elle | Sapma sınırı | — |
+| Hız 1× değil | Kesin kadans **devre dışı** (gizlenmez) | "Kesin kadans yalnızca 1×'te çalışır." (02-cozum §4.10) |
+| Yanıp Sönen Işıkları Azalt açık ve Nit uyguluyor | — | Şu an bölümünde nötr satır: "Yanıp Sönen Işıkları Azalt uygulanıyor" (§7.6). Durumun motordan okunması **[G-23]**. |
 
 **Headroom durum satırı (C-12'nin altı):**
 
@@ -856,12 +875,27 @@ Hareket tanıyıcılar UIKit'te kurulur (§9.6): tek ve çift dokunuş ayrımı 
 
 Kırmızı bu satırda kullanılmaz. Kırmızı yalnızca hata ve kırpma için ayrılmıştır (§6.1).
 
-**Sahne beyazı satırı (C-13), sahne bazlı `L_ref`:**
-- **Biçim:** "Sahne beyazı **X** nit → ≈ **Y** nit". X, sahnenin tespit edilen referans beyazıdır (DV L1 ya da HDR10 histogramı, kaynak nit cinsinden). Y, ekranda tahmin edilen beyazdır.
-- **Güncelleme:** Sahne değişiminde, 300 ms çapraz geçişle. Kare kare titremez.
-- **Diğer kipler:** Referans beyaz "Sabit 203 nit" ise "Referans beyaz 203 nit (sabit) → ≈ 1140 nit". SDR'da "SDR beyazı → ≈ 1200 nit". Headroom kısıtlıysa Y buna göre düşer ve durum satırıyla tutarlı olur: "→ ≈ 600 nit (SDR tepesi)".
-- **"≈" zorunludur (İ-3).** Panelin gerçek nit değeri public API ile okunamaz; Y, 1200 nitlik tepe varsayımıyla hesaplanan bir tahmindir. Satıra dokununca tek cümlelik açıklama açılır: "Tahmin: panel tepesinin 1200 nit olduğu varsayılır."
-- Y'nin formülü ve X'in kaynağı **[ajan 2]**: 02-cozum'a eklenecek "sahne bazlı `L_ref` (MVP)" bölümünde tanımlanmalı.
+**Sahne beyazı satırı (C-13), sahne bazlı `L_ref` (02-cozum §3.5.1, §14 G-01):**
+- **Biçim:** "Sahne beyazı **X** nit → ≈ **Y** nit".
+  - X = `SceneWhite.sourceNits`: sahnenin tespit edilen diffuse beyazı (DV'de L1, HDR10/HLG'de histogram P90; kaynak nit cinsinden).
+  - Y = `SceneWhite.displayEstimateNits`: ekranda tahmin edilen beyaz. **Y'yi motor hesaplar; arayüz hesaplamaz.** 10 nite yuvarlanmış gelir.
+- **Güncelleme:** Arayüz yalnızca `sceneWhiteChanged` olayıyla güncellenir; olay en fazla 1 Hz'dir (kesimden sonra değer oturunca, sahne içinde ≥ 0,1 stop değişince ya da headroom durumu değişince). Geçiş 300 ms çapraz geçiştir (`motion.crossfade`). Panel yeniden açılınca son değer `EngineState.display.sceneWhite`'tan gelir.
+- **Gösterim kuralları.** Y yalnızca motor bir değer verdiyse yazılır; `nil` ise arayüz Y yerine aşağıdaki metni koyar:
+
+  | `HeadroomStatus` / durum | Satır | Not |
+  |---|---|---|
+  | `panelPeak` | "Sahne beyazı 140 nit → ≈ 1140 nit" | Durum noktası yeşil |
+  | `thermal` | "Sahne beyazı 140 nit → ≈ 900 nit" | Y düşer; durum satırı zaten amber |
+  | `systemCollapsed`, `lowPower` | "Sahne beyazı 140 nit → ≈ 600 nit (SDR tepesi)" | "(SDR tepesi)" eki yalnızca parlaklık 1,0'dayken yazılır (Tepe Kilidi çöküşte parlaklığı 1,0'a çıkarır; `HeadroomSnapshot.brightness`). Değilse yalnızca "→ ≈ Y nit". |
+  | `sliderLimited`, `peakLockRaising` | "Sahne beyazı 140 nit → tepeye ulaşmıyor" | **Y gösterilmez.** Kaydırıcı dirseğin altındayken ekran nit'i öğrenilemez. Metin nötr; nedeni üstteki durum satırındadır. |
+  | `reference` | Satır gizli | Referans'ta parlaklığı sistem belirler |
+  | Parlaklık tablosu `S(b)` bu parlaklık için henüz öğrenilmedi | "Sahne beyazı 140 nit" | Y'nin yeri boş kalır; tahmin yoksa yazılmaz (İ-3) |
+  | SDR kaynak | "SDR beyazı → ≈ 1140 nit" | `sourceNits` SDR'da `nil`; yalnızca Y yazılır |
+  | Sabit 203 | "Referans beyaz 203 nit (sabit) → ≈ 1140 nit" | Aynı Y kuralları |
+  | Elle | "Referans beyaz 150 nit (elle) → ≈ 1140 nit" | Aynı Y kuralları |
+
+- **"≈" zorunludur (İ-3).** Panelin gerçek nit değeri public API ile okunamaz. Satıra dokununca tek cümlelik açıklama açılır: "Tahmin: panel tepesi 1200 nit varsayılır; ekran parlaklığının etkisi bu cihazda ölçülerek öğrenilir." (`P_ref` 1200 nit, Laboratuvar'dan ayarlanabilir; 02-cozum §14 G-01.)
+- **Bilgi panelinde uzun biçim** (02-cozum §3.5.1): "Sahne beyazı 128 nit → ≈ 1140 nit (0,95 H) · kaynak HDR10 histogram (P90) · çapa 135 nit". DV'de kaynak "DV L1 (trim düzeltmeli)".
 
 **A/B karşılaştır (Temiz Nit, uzman).** [Başlat]'a basınca panel kapanır ve E-39 katmanı açılır:
 
@@ -879,10 +913,10 @@ Kırmızı bu satırda kullanılmaz. Kırmızı yalnızca hata ve kırpma için 
 └───────────────────────────────────────┴───────────────────────────────────────┘
 ```
 
-- Sol yarı ham Nit, sağ yarı Temiz Nit (01b §2.5). Ayraç sürüklenebilir; konumu shader'a tek bir değer olarak gider **[ajan 2]**. Ayraç çizgisi 1 pt beyaz, SDR.
+- Sol yarı ham Nit, sağ yarı Temiz Nit (01b §2.5). Ayraç sürüklenebilir; konumu shader'a tek değer olarak gider: `setABSplit(0…1)`, kapatınca `setABSplit(nil)` (G-17). Ayraç çizgisini (1 pt beyaz, SDR) **arayüz katmanı** çizer; shader yalnızca bölmeyi uygular.
 - Oynatma sürer. Tek dokunuş katmanı kapatmaz; yalnızca [Bitir] kapatır. Böylece kullanıcı ekrana dokunarak yanlışlıkla testten çıkmaz.
 
-**Bant haritası.** Düzeltilen karolar videonun üstünde %40 karışımlı macenta (P3 1,0 / 0,0 / 1,0) ile boyanır. Bu boya shader'da ve SDR seviyesinde (`≤ 1.0`) yapılır; ayrı bir arayüz katmanı değildir. Etkinken format çipinin yanında "Bant haritası" çipi görünür ki kullanıcı açık bıraktığını unutmasın.
+**Bant haritası.** Düzeltilen karolar videonun üstünde %40 karışımlı macenta ile boyanır: `bandMapAlpha = 0,4`, `bandMapColor` = doğrusal P3 `(1, 0, 1)` (G-17, 02-cozum §3.9). Bu boya shader'da ve SDR seviyesinde (`≤ 1.0`) yapılır; ayrı bir arayüz katmanı değildir. Etkinken format çipinin yanında "Bant haritası" çipi görünür ki kullanıcı açık bıraktığını unutmasın.
 
 ### 4.5 Ses paneli: parça, Diyalog, ses yükseltme, limiter
 
