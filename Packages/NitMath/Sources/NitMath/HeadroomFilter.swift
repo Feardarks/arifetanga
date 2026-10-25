@@ -4,7 +4,8 @@ import Foundation
 /// `effective` hiçbir zaman o anki `H_cur`'u aşmaz (P-2).
 public struct HeadroomFilter: Sendable {
     public var tauUp: Double
-    /// Bağıl ölü bant; bu oranın altındaki yükselişler yok sayılır.
+    /// Bağıl ölü bant. Bu oranın altındaki yükselişler yumuşatılmadan doğrudan uygulanır
+    /// (gözle görülmez). Yok sayılsalardı süzgeç hedefin %1 altında takılır, parlaklık kaybedilirdi.
     public var deadband: Double
 
     public private(set) var smoothed: Double = 1
@@ -31,6 +32,9 @@ public struct HeadroomFilter: Sendable {
             let alpha = 1 - exp(-max(dt, 0) / max(tauUp, 1e-6))
             log2Smoothed += alpha * (log2(h) - log2Smoothed)
             smoothed = pow(2, log2Smoothed)
+        } else {
+            smoothed = h
+            log2Smoothed = log2(h)
         }
         effective = min(smoothed, h)
         return effective

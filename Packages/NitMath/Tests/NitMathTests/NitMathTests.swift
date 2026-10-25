@@ -163,14 +163,21 @@ final class HeadroomFilterTests: XCTestCase {
             XCTAssertLessThanOrEqual(value, 8)
             t += 0.016
         }
-        XCTAssertEqual(value, 8, accuracy: 0.05)
+        // Ölü bandın içine girince hedefe tam oturur; %1 altında takılı kalmaz.
+        XCTAssertEqual(value, 8, accuracy: 1e-12)
     }
 
-    func testDeadbandIgnoresTinyRises() {
+    func testTinyRisesApplyDirectly() {
         var f = HeadroomFilter(deadband: 0.01)
         f.update(current: 4, dt: 0)
         f.update(current: 3.98, dt: 0.016)
-        XCTAssertEqual(f.update(current: 4.0, dt: 0.016), 3.98, accuracy: 1e-12)
+        XCTAssertEqual(f.update(current: 4.0, dt: 0.016), 4.0, accuracy: 1e-12)
+    }
+
+    func testLargeRiseIsNotInstant() {
+        var f = HeadroomFilter(tauUp: 0.150, deadband: 0.01)
+        f.update(current: 2, dt: 0)
+        XCTAssertLessThan(f.update(current: 4, dt: 0.016), 2.2)
     }
 }
 
