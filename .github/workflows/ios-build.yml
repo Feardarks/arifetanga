@@ -1,0 +1,74 @@
+name: iOS derleme
+
+# macOS dakikaları pahalı (private repoda 10× çarpan): yalnızca uygulama kodu değişince ya da elle çalışır.
+on:
+  workflow_dispatch:
+  push:
+    branches: ["main", "claude/**"]
+    paths:
+      - "App/**"
+      - "Packages/**"
+      - "project.yml"
+      - ".github/workflows/ios-build.yml"
+
+concurrency:
+  group: ios-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: İmzasız IPA
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: En yeni kararlı Xcode'u seç
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_[0-9]*.app | grep -viE 'beta|release_candidate|_rc' | sort -V | tail -1)
+          echo "Seçilen: $XCODE"
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+
+      - name: XcodeGen kur ve projeyi üret
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Derle (imzasız, Release, iphoneos)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project Arifetanga.xcodeproj \
+            -scheme Arifetanga \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee build.log | grep -E 'error:|warning: .*(deprecated|Sendable)|BUILD (SUCCEEDED|FAILED)|\*\* ' || true
+          test -d build/Build/Products/Release-iphoneos/Arifetanga.app
+
+      - name: IPA paketle
+        run: |
+          mkdir -p Payload
+          cp -R build/Build/Products/Release-iphoneos/Arifetanga.app Payload/
+          zip -qry Arifetanga-unsigned.ipa Payload
+          ls -lh Arifetanga-unsigned.ipa
+
+      - name: IPA'yı yükle
+        uses: actions/upload-artifact@v4
+        with:
+          name: Arifetanga-unsigned-ipa
+          path: Arifetanga-unsigned.ipa
+          retention-days: 14
+
+      - name: Derleme günlüğünü yükle (hata durumunda)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
+          retention-days: 7

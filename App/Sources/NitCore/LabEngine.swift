@@ -1,0 +1,406 @@
+import AVFoundation
+import NitMath
+import QuartzCore
+import UIKit
+
+/// S0 Nit Laboratuvarı motoru.
+///
+/// S0 sadeleştirmesi: kod çözme, ses ve senkron `AVPlayer`'a bırakılır. Nit yolu kareleri
+/// `AVPlayerItemVideoOutput`'tan alır; Referans yolu aynı oynatıcının `AVPlayerLayer`'ıdır.
+/// Böylece iki yol aynı saatte kalır ve geçiş yalnızca katman görünürlüğüdür (K6).
+/// MKV/FFmpeg ile kendi demux ve VideoToolbox hattımız S2'de gelir (02-cozum §10.2).
+@MainActor
+final class LabEngine: NSObject {
+    let surface = VideoSurfaceView()
+    let telemetry = Telemetry()
+
+    var onSnapshot: ((LabSnapshot) -> Void)?
+    var onStatusChange: ((HeadroomStatus) -> Void)?
+    var chromeVisible = true
+    var panelName = "yok"
+    var loop = true
+
+    var params = NitParams() {
+        didSet { paramsChanged(from: oldValue) }
+    }
+
+    private(set) var source: LabSource = .none
+    private(set) var rendererAvailable: Bool
+
+    private let renderer: NitRenderer?
+    private let player = AVPlayer()
+    private var output: AVPlayerItemVideoOutput?
+    private var displayLink: CADisplayLink?
+    private var endObserver: NSObjectProtocol?
+    private var accessedURL: URL?
+    private var sourceLabel = "yok"
+
+    private var filter = HeadroomFilter()
+    private var peakLock = PeakLock()
+    private var snapshot = LabSnapshot()
+
+    private var currentBuffer: CVPixelBuffer?
+    private var currentFormat: FrameFormat?
+    private var hdrHint = false
+    private var frameDuration = 1.0 / 24
+    private var lastDisplayPTS: Double?
+    private var ticksSinceFrame = 0
+    private var cadenceRing: [Int] = []
+    private var jitterRing: [Double] = []
+    private var lastTimestamp: CFTimeInterval?
+    private var lastRenderedHeadroom = 0.0
+    private var needsRender = true
+    private var lastPeakEval = 0.0
+    private var lastRowTime = 0.0
+    private var lastSnapshotTime = 0.0
+    private var lastObservedBrightness: Double?
+    private var appSetBrightness: Double?
+    private var initialBrightness: Double?
+    private var switchStart: CFTimeInterval?
+    private var lastParamEvent: CFTimeInterval = 0
+
+    override init() {
+        renderer = NitRenderer()
+        rendererAvailable = renderer != nil
+        super.init()
+        if let renderer {
+            NitRenderer.configure(surface.metalLayer, device: renderer.device)
+        } else {
+            snapshot.errorMessage = "Metal başlatılamadı"
+        }
+        surface.playerLayer.player = player
+        surface.show(params.mode)
+        surface.onLayout = { [weak self] in self?.needsRender = true }
+        player.preventsDisplaySleepDuringVideoPlayback = true
+        filter = HeadroomFilter(tauUp: params.tauUpMs / 1000, deadband: params.deadbandPercent / 100)
+        peakLock = PeakLock(config: params.peakLockConfig, enabled: params.peakLock)
+        telemetry.setParams(params.csvSummary)
+    }
+
+    // MARK: Yaşam döngüsü
+
+    func start() {
+        guard displayLink == nil else { return }
+        UIApplication.shared.isIdleTimerDisabled = true
+        let link = CADisplayLink(target: self, selector: #selector(tick(_:)))
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+        event("Laboratuvar açıldı")
+    }
+
+    func stop() {
+        displayLink?.invalidate()
+        displayLink = nil
+        player.pause()
+        UIApplication.shared.isIdleTimerDisabled = false
+        // Kullanıcı arada değiştirmediyse parlaklığı giriş değerine döndür (02-cozum §3.6).
+        if let screen, let initial = initialBrightness, let set = appSetBrightness,
+           abs(Double(screen.brightness) - set) < 0.01 {
+            screen.brightness = CGFloat(initial)
+        }
+        releaseAccess()
+        event("Laboratuvar kapandı")
+    }
+
+    // MARK: Kaynaklar
+
+    func load(url: URL) {
+        releaseAccess()
+        if url.startAccessingSecurityScopedResource() { accessedURL = url }
+        resetFrameState()
+        source = .file(url)
+        sourceLabel = url.lastPathComponent
+        snapshot.errorMessage = nil
+        snapshot.formatLabel = "Yükleniyor…"
+        event("Dosya: \(sourceLabel)")
+
+        let asset = AVURLAsset(url: url)
+        Task { [weak self] in
+            do {
+                guard let track = try await asset.loadTracks(withMediaType: .video).first else {
+                    self?.fail("Dosyada video izi yok")
+                    return
+                }
+                let (fps, characteristics) = try await track.load(.nominalFrameRate, .mediaCharacteristics)
+                self?.attach(asset: asset, hdr: characteristics.contains(.containsHDRVideo), fps: Double(fps))
+            } catch {
+                self?.fail("Dosya açılamadı: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    func showPattern(_ spec: PatternSpec) {
+        player.pause()
+        resetFrameState()
+        source = .pattern(spec)
+        sourceLabel = spec.label
+        snapshot.errorMessage = nil
+        snapshot.formatLabel = spec.label
+        snapshot.isHDR = spec.kind.isHDR
+        needsRender = true
+        event("Desen: \(spec.label)")
+    }
+
+    func togglePlay() {
+        guard case .file = source else { return }
+        if player.timeControlStatus == .playing {
+            player.pause()
+            event("Duraklat")
+        } else {
+            player.play()
+            event("Oynat")
+        }
+    }
+
+    func seek(to seconds: Double) {
+        lastDisplayPTS = nil
+        player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+    }
+
+    func resetKnee() {
+        peakLock.resetKnee()
+        event("b_k sıfırlandı")
+    }
+
+    func exportCSV() throws -> URL {
+        try telemetry.exportCSV()
+    }
+
+    func event(_ text: String) {
+        telemetry.append(row(event: text))
+    }
+
+    // MARK: Özel
+
+    private var screen: UIScreen? { surface.window?.windowScene?.screen }
+
+    private func attach(asset: AVURLAsset, hdr: Bool, fps: Double) {
+        hdrHint = hdr
+        frameDuration = fps > 0 ? 1 / fps : 1.0 / 24
+        let pixelFormat = hdr ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        let output = AVPlayerItemVideoOutput(outputSettings: [
+            kCVPixelBufferPixelFormatTypeKey as String: pixelFormat,
+            AVVideoAllowWideColorKey: true,
+        ])
+        let item = AVPlayerItem(asset: asset)
+        item.add(output)
+        self.output = output
+
+        if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
+        endObserver = NotificationCenter.default.addObserver(forName: AVPlayerItem.didPlayToEndTimeNotification,
+                                                             object: item, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.handleEnd() }
+        }
+
+        player.replaceCurrentItem(with: item)
+        snapshot.isHDR = hdr
+        snapshot.formatLabel = hdr ? "HDR · biçim bekleniyor" : "SDR · biçim bekleniyor"
+        player.play()
+    }
+
+    private func handleEnd() {
+        guard loop else { return }
+        lastDisplayPTS = nil
+        player.seek(to: .zero)
+        player.play()
+        event("Döngü başa sardı")
+    }
+
+    private func fail(_ message: String) {
+        snapshot.errorMessage = message
+        snapshot.formatLabel = "Hata"
+        event("Hata: \(message)")
+    }
+
+    private func releaseAccess() {
+        accessedURL?.stopAccessingSecurityScopedResource()
+        accessedURL = nil
+    }
+
+    private func resetFrameState() {
+        output = nil
+        currentBuffer = nil
+        currentFormat = nil
+        lastDisplayPTS = nil
+        ticksSinceFrame = 0
+        cadenceRing.removeAll()
+        snapshot.droppedFrames = 0
+        renderer?.gpuStats.reset()
+        renderer?.flushCache()
+        needsRender = true
+    }
+
+    private func paramsChanged(from old: NitParams) {
+        filter.tauUp = params.tauUpMs / 1000
+        filter.deadband = params.deadbandPercent / 100
+        peakLock.config = params.peakLockConfig
+        peakLock.enabled = params.peakLock && params.mode == .nit
+        if params.mode != old.mode {
+            switchStart = CACurrentMediaTime()
+            surface.show(params.mode)
+        }
+        telemetry.setParams(params.csvSummary)
+        needsRender = true
+        // Kaydırıcı sürüklenirken CSV'yi boğmamak için parametre olayları en fazla 2 Hz yazılır.
+        let now = CACurrentMediaTime()
+        if params.mode != old.mode || now - lastParamEvent >= 0.5 {
+            lastParamEvent = now
+            event("Parametre: \(params.csvSummary)")
+        }
+    }
+
+    @objc private func tick(_ link: CADisplayLink) {
+        let now = link.timestamp
+        let dt = lastTimestamp.map { now - $0 } ?? link.duration
+        if let last = lastTimestamp, link.duration > 0 {
+            // Bir sonraki vsync'e göre sapma; kaçırılan vsync'ler ayrıca kadansta görünür.
+            let delta = now - last
+            let periods = max(1, (delta / link.duration).rounded())
+            jitterRing.append(abs(delta - periods * link.duration) * 1000)
+            if jitterRing.count > 120 { jitterRing.removeFirst(jitterRing.count - 120) }
+        }
+        lastTimestamp = now
+
+        guard let screen else { return }
+        if initialBrightness == nil { initialBrightness = Double(screen.brightness) }
+
+        let hCur = Double(screen.currentEDRHeadroom)
+        let hPot = Double(screen.potentialEDRHeadroom)
+        let hEff = filter.update(current: hCur, dt: dt)
+        let brightness = Double(screen.brightness)
+        let lowPower = ProcessInfo.processInfo.isLowPowerModeEnabled
+        let thermal = ProcessInfo.processInfo.thermalState
+        let captured = surface.window?.traitCollection.sceneCaptureState == .active
+
+        // P-1: uygulama parlaklığı asla düşürmez; dışarıdan gelen düşüşler yalnızca kaydedilir.
+        if let previous = lastObservedBrightness, brightness < previous - 0.005 {
+            snapshot.externalDimCount += 1
+            event("Parlaklık dışarıdan düştü: \(TR.num(previous)) → \(TR.num(brightness))")
+        }
+        lastObservedBrightness = brightness
+
+        // Tepe Kilidi ve durum, 10 Hz.
+        if now - lastPeakEval >= 0.1 {
+            lastPeakEval = now
+            let result = peakLock.update(PeakLock.Input(
+                time: now, current: hCur, potential: hPot, brightness: brightness, lowPower: lowPower,
+                thermalSerious: thermal.rawValue >= ProcessInfo.ThermalState.serious.rawValue, captured: captured))
+            if let target = result.brightness, target > brightness, params.mode == .nit {
+                screen.brightness = CGFloat(target)
+                appSetBrightness = target
+                lastObservedBrightness = target
+                event("Tepe Kilidi: parlaklık \(TR.num(brightness)) → \(TR.num(target))")
+            }
+            snapshot.raising = result.raising
+            snapshot.kneeBrightness = peakLock.kneeBrightness
+            if result.status != snapshot.status {
+                event("Durum: \(snapshot.status.rawValue) → \(result.status.rawValue)")
+                snapshot.status = result.status
+                onStatusChange?(result.status)
+            }
+        }
+
+        // Yeni video karesi.
+        if case .file = source, let output {
+            let itemTime = output.itemTime(forHostTime: link.targetTimestamp)
+            if output.hasNewPixelBuffer(forItemTime: itemTime) {
+                var displayTime = CMTime.invalid
+                if let pb = output.copyPixelBuffer(forItemTime: itemTime, itemTimeForDisplay: &displayTime) {
+                    let pts = displayTime.isValid ? displayTime.seconds : itemTime.seconds
+                    if let last = lastDisplayPTS {
+                        let gap = pts - last
+                        if gap > frameDuration * 1.5, gap < 1 {
+                            snapshot.droppedFrames += Int((gap / frameDuration).rounded()) - 1
+                        }
+                    }
+                    lastDisplayPTS = pts
+                    if ticksSinceFrame > 0 {
+                        cadenceRing.append(ticksSinceFrame)
+                        if cadenceRing.count > 12 { cadenceRing.removeFirst(cadenceRing.count - 12) }
+                    }
+                    ticksSinceFrame = 0
+                    currentBuffer = pb
+                    if currentFormat == nil {
+                        let format = FrameFormat.from(pb, hdrHint: hdrHint)
+                        currentFormat = format
+                        snapshot.formatLabel = "\(CVPixelBufferGetWidth(pb))×\(CVPixelBufferGetHeight(pb)) · \(format.label)"
+                        snapshot.isHDR = format.transfer.isHDR
+                        event("Biçim: \(snapshot.formatLabel)")
+                    }
+                    needsRender = true
+                }
+            }
+            if player.timeControlStatus == .playing { ticksSinceFrame += 1 }
+        }
+
+        // Headroom değişince statik kare de yeniden çizilir: düşüşte her zaman, yükselişte ≥ %1.
+        if hEff < lastRenderedHeadroom - 1e-4 || abs(hEff - lastRenderedHeadroom) / max(lastRenderedHeadroom, 1) >= 0.01 {
+            needsRender = true
+        }
+
+        if params.mode == .nit, needsRender, let renderer {
+            var pattern: PatternSpec?
+            if case .pattern(let p) = source { pattern = p }
+            snapshot.outputMax = renderer.render(layer: surface.metalLayer, pixelBuffer: currentBuffer, format: currentFormat,
+                                                 pattern: pattern, settings: params.renderSettings, headroom: hEff)
+            lastRenderedHeadroom = hEff
+            needsRender = false
+        } else if params.mode == .reference {
+            snapshot.outputMax = 0
+        }
+
+        if let start = switchStart {
+            snapshot.lastSwitchMs = (CACurrentMediaTime() - start) * 1000
+            event("Geçiş: \(params.mode.rawValue) · \(TR.num(snapshot.lastSwitchMs ?? 0, 0)) ms")
+            switchStart = nil
+        }
+
+        snapshot.hCur = hCur
+        snapshot.hPot = hPot
+        snapshot.hSmoothed = filter.smoothed
+        snapshot.hEff = params.mode == .nit ? hEff : hCur
+        snapshot.brightness = brightness
+        snapshot.thermal = thermal
+        snapshot.lowPower = lowPower
+        snapshot.captured = captured
+
+        if now - lastRowTime >= 0.5 {
+            lastRowTime = now
+            telemetry.append(row(event: ""))
+        }
+        if now - lastSnapshotTime >= 0.1 {
+            lastSnapshotTime = now
+            let (p50, p95) = renderer?.gpuStats.percentiles() ?? (0, 0)
+            snapshot.gpuP50 = p50
+            snapshot.gpuP95 = p95
+            snapshot.cadence = cadenceLabel()
+            snapshot.vsyncJitterMs = jitterRing.max() ?? 0
+            snapshot.currentTime = player.currentTime().seconds.isFinite ? player.currentTime().seconds : 0
+            let duration = player.currentItem?.duration.seconds ?? 0
+            snapshot.duration = duration.isFinite ? duration : 0
+            snapshot.playing = player.timeControlStatus == .playing
+            snapshot.recordingSeconds = telemetry.elapsed
+            onSnapshot?(snapshot)
+        }
+    }
+
+    private func cadenceLabel() -> String {
+        let recent = cadenceRing.suffix(8)
+        guard recent.count >= 4 else { return "—" }
+        let set = Set(recent)
+        if set == [2, 3] { return "3:2" }
+        if set.count == 1, let n = set.first { return "\(n):\(n)" }
+        return recent.map { String($0) }.joined(separator: " ")
+    }
+
+    private func row(event: String) -> Telemetry.Row {
+        Telemetry.Row(
+            t: telemetry.elapsed, date: Date(),
+            hCur: snapshot.hCur, hPot: snapshot.hPot, hS: snapshot.hSmoothed, hEff: snapshot.hEff,
+            brightness: snapshot.brightness, status: snapshot.status.rawValue, mode: params.mode.rawValue,
+            source: sourceLabel, thermal: snapshot.thermal.label, lowPower: snapshot.lowPower, captured: snapshot.captured,
+            gpuP50: snapshot.gpuP50, gpuP95: snapshot.gpuP95, dropped: snapshot.droppedFrames, cadence: snapshot.cadence,
+            jitterMs: snapshot.vsyncJitterMs, outputMax: snapshot.outputMax, playing: snapshot.playing,
+            chromeVisible: chromeVisible, panel: panelName, event: event)
+    }
+}

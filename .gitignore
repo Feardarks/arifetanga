@@ -1,0 +1,16 @@
+# XcodeGen çıktıları (project.yml'den üretilir; elle düzenlenmez)
+*.xcodeproj/
+*.xcworkspace/
+App/Info.plist
+
+# Derleme
+build/
+DerivedData/
+.build/
+.swiftpm/
+Payload/
+*.ipa
+*.dSYM.zip
+
+# macOS
+.DS_Store

@@ -1,0 +1,57 @@
+name: Arifetanga
+
+options:
+  bundleIdPrefix: com.feardarks
+  deploymentTarget:
+    # S0, runner'daki mevcut Xcode ile derlensin diye iOS 18 hedefler; cihaz iOS 27.0.1.
+    # iOS 27'ye özgü API'ler (Receiver, Now Playing) gelince 27.0'a çıkılır (02-cozum K-24).
+    iOS: "18.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    SWIFT_VERSION: "5.0"
+    SWIFT_STRICT_CONCURRENCY: minimal
+
+packages:
+  NitMath:
+    path: Packages/NitMath
+
+targets:
+  Arifetanga:
+    type: application
+    platform: iOS
+    sources:
+      - path: App/Sources
+    dependencies:
+      - package: NitMath
+    info:
+      path: App/Info.plist
+      properties:
+        CFBundleDisplayName: Arifetanga
+        LSRequiresIPhoneOS: true
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UIRequiresFullScreen: true
+        UIStatusBarHidden: true
+        UIBackgroundModes:
+          - audio
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        ITSAppUsesNonExemptEncryption: false
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.feardarks.arifetanga
+        TARGETED_DEVICE_FAMILY: "1"
+        SUPPORTS_MACCATALYST: NO
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_USER_SCRIPT_SANDBOXING: YES
+        MTL_FAST_MATH: YES
+    scheme:
+      testTargets: []
