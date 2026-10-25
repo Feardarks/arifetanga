@@ -6,6 +6,7 @@
 > - `docs/00-brief.md`
 > - `docs/01-konsept.md` rev. 5: MVP 10 özellik; M10 boost dahil. Rev. 5 ile sahne bazlı `L_ref` MVP'de ve M2'nin parçası (§3.5.1).
 > - `docs/01b-ek-fikirler.md`: N1 Temiz Nit MVP'de ve M2'nin parçası; N2 Ses Çekirdeği v1.1'in ilk işi
+> - `docs/03-tasarim.md` (onaylı) ve `docs/01-konsept.md` rev. 6. Uyum turu: oynatma hızı (§4.10), elle altyazı gecikmesi (§4.11), S0'ın tasarımla hizalanması (§10.1) ve tasarım geri bildirimlerine yanıtlar (§14, G-01–G-20).
 >
 > **İşaretler:**
 > - **[doğrulandı]**: Apple dokümantasyonu, WWDC oturumu, iOS 27 sürüm notu ya da kaynak koduyla teyit edildi.
@@ -61,7 +62,10 @@
     - Yüksek kayıtlı içerikte bir "boost yöneticisi" pompalamayı önler.
     - Native Atmos'ta boost açılırsa ses otomatik olarak PCM'e çözülür. DAC'ta "bit-perfect değil" göstergesi yanar.
     - Boost değeri rota başına hatırlanır.
-11. **Derleme ve ölçüm:**
+11. **Rev. 6 eklemeleri:**
+    - **Oynatma hızı 0,5×–2× (M1):** Synchronizer hızı ve renderer'ın perde koruyan `timeDomain` algoritmasıyla yapılır. İçeriğe bağlı süzgeçler medya zamanında çalışır. Native Atmos 1× dışında PCM'e çözülür (§4.10).
+    - **Elle altyazı gecikmesi (M6):** Ofset medya zamanında uygulanır. Adım 50 ms, aralık ±10 s. Dosya ve parça bazında hatırlanır (§4.11).
+12. **Derleme ve ölçüm:**
     - Proje XcodeGen ve SPM modülleriyle üretilir.
     - Native bağımlılıklar ayrı bir iş akışında XCFramework olarak derlenir ve sürüm varlığı olarak önbelleğe alınır.
     - İmzalı ad hoc IPA, OTA (`itms-services`) ya da Sideloadly ile yüklenir.
@@ -81,7 +85,8 @@ Diğer önemli riskler: native Atmos (AS-9), Mac olmadan hata ayıklama ve profi
 
 Uygulama aşamasında ilk kodlanacak şey budur. Kapsamı ve başarı ölçütleri §10.1'de.
 
-- **Kapsam:** Tek ekran, yerel bir SDR ve bir HDR10 dosyası, headroom göstergesi, Nit/Referans geçişi.
+- **Kapsam:** Tasarımdaki Nit Laboratuvarı (E-61): tek ekran, yerel SDR ve HDR10 dosyaları, headroom göstergesi, Nit/Referans geçişi, eşitlik ve tonalite testleri.
+- **Bağımlılık:** Native bağımlılık yok. AVAssetReader + VideoToolbox + Metal kullanılır; FFmpeg ve libdovi gerekmez (K-31).
 - **Yanında:** CI ve imza iskeleti, AS-33 (EDR çıkış zincirinde bant ve titreşim testi) ve 2 saatlik headroom kaydı.
 - **Hemen ardından S0b (AS-38):** Sahne bazlı `L_ref` aynı prototip üzerine eklenir (§10.2).
 
@@ -131,12 +136,12 @@ Bunlar kapsam değişikliği değil; kök kısıtlardan çıkan netleştirmelerd
 
 | # | Problem | Kök kısıt | Seçilen çözüm ve API'ler | Yedek plan | Risk |
 |---|---|---|---|---|---|
-| **M1** Evrensel oynatma | MKV, M2TS, ISO ve BDMV açılmalı. VC-1, MPEG-2 ve AV1 çözülmeli. 4K remux takılmadan oynamalı. | iOS'ta MediaExtension yok **[doğrulandı]**. AVFoundation MKV açmıyor. A13'te AV1, VC-1 ve MPEG-2 için donanım çözücü yok. | `libavformat` + özel `AVIOContext` · `libbluray`/`libudfread` (ana başlık, seamless branching) · `VTDecompressionSession` (H.264, HEVC Main/Main10) · FFmpeg (VC-1, MPEG-2, MPEG-4 ASP, VP9) · dav1d (AV1 ≤ 1080p) · `AVSampleBufferRenderSynchronizer` saati · Metal deinterlace · 3:2 kadans (§3.8) | VT bir HEVC akışını reddederse (4:2:2, 12-bit) FFmpeg `hevc` yazılım çözücüsüne geçilir (≤ 1080p). 4K AV1'de "desteklenmiyor" kartı ve nedeni gösterilir. | Orta (AS-3, AS-7, AS-8) |
+| **M1** Evrensel oynatma | MKV, M2TS, ISO ve BDMV açılmalı. VC-1, MPEG-2 ve AV1 çözülmeli. 4K remux takılmadan oynamalı. | iOS'ta MediaExtension yok **[doğrulandı]**. AVFoundation MKV açmıyor. A13'te AV1, VC-1 ve MPEG-2 için donanım çözücü yok. | `libavformat` + özel `AVIOContext` · `libbluray`/`libudfread` (ana başlık, seamless branching) · `VTDecompressionSession` (H.264, HEVC Main/Main10) · FFmpeg (VC-1, MPEG-2, MPEG-4 ASP, VP9) · dav1d (AV1 ≤ 1080p) · `AVSampleBufferRenderSynchronizer` saati · Metal deinterlace · 3:2 kadans (§3.8) · **hız 0,5×–2×**: `setRate` + `timeDomain` perde koruma (§4.10, rev. 6) | VT bir HEVC akışını reddederse (4:2:2, 12-bit) FFmpeg `hevc` yazılım çözücüsüne geçilir (≤ 1080p). 4K AV1'de "desteklenmiyor" kartı ve nedeni gösterilir. | Orta (AS-3, AS-7, AS-8) |
 | **M2** Nit Çekirdeği + N1 | SDR ve HDR'da beyaz ≈ 1200 nit olmalı; bant olmamalı. | Headroom'u sistem verir: kaydırıcı, 8× sınırı, ısı, Düşük Güç Modu, ABL. Panelin nit değeri public API ile okunamaz. Arka planda GPU yok. Mac yok, dolayısıyla Instruments yok. | §3'ün tamamı: CAMetalLayer EDR, `currentEDRHeadroom`, kapalı form eğri, sahne bazlı `L_ref` (DV L1 / HDR10 histogramı, rev. 5), Tepe Kilidi, `present(at:)`, Temiz Nit | Headroom çökerse Tepe Kilidi SDR tepesini korur. GPU bütçesi aşılırsa yalnızca hesap kalitesi düşer, parlaklık asla. | **Yüksek** (R1) |
 | **M3** HDR ve DV | HDR10, HLG ve DV P5/P8 doğru renkte oynamalı. P7, P8.1'e çevrilmeli. | Apple, özel hatta DV tetiklemeyi belgelemiyor. VT, P7 FEL'i çözmüyor. Dolby'nin DM algoritması kapalı. | **Referans:** `dvcC`'li `CMVideoFormatDescription` + `AVSampleBufferDisplayLayer`. P7'de EL atılır, RPU `libdovi` mode 2 ile çevrilir. **Nit:** BL, VT'de düz HEVC olarak çözülür; RPU'dan çıkan reshaping ve matrisler shader'a verilir (§3.7). | Referans'ta DV tetiklenmezse HDR10 olarak oynar ve rozet "DV → HDR10" ile nedenini gösterir. Nit yolunda renk reshaping sayesinde zaten doğrudur. | **Yüksek** (AS-1, AS-2, AS-30) |
 | **M4** Sinema sesi | Atmos çalmalı. TrueHD ve DTS-HD uzamsal sese aktarılmalı. Gece modu ve BT gecikme telafisi olmalı. | TrueHD ve DTS için nesne çözücü yok. E-AC-3 JOC'yi yalnızca Apple render eder. | E-AC-3 JOC sıkıştırılmış olarak `AVSampleBufferAudioRenderer`'a gider (`allowedAudioSpatializationFormats` **[doğrulandı]**). TrueHD ve DTS → FFmpeg → 7.1 PCM (açık kanal tanımlı `AudioChannelLayout`). Gece modu önden evrede DRC. | JOC Atmos olarak tetiklenmezse Apple `AudioConverter` ile 5.1/7.1 PCM'e çözülür. | Orta–yüksek (AS-9, AS-10) |
 | **M5** Audiophile müzik | Bit-perfect, örnekleme hızı geçişi, gapless çalma ve loudness. | iOS mikseri her zaman yolda. Örnekleme hızı oturum düzeyinde. DAC ses seviyesi denetimi belirsiz. | `AVAudioSession.setPreferredSampleRate` (dosya hızı) · renderer'a dosyanın PCM'i, DSP bypass · R128 vDSP ile · gapless için sürekli PTS · sinyal yolu görünümü | Hız değiştirilemezse en yüksek kalitede `AVAudioConverter` kullanılır ve "bit-perfect değil" göstergesi yanar. | Orta (AS-11) |
-| **M6** Gömülü altyazı | PGS, ASS ve SRT ekran çözünürlüğünde ve doğru zamanlamayla görünmeli. | AVFoundation MKV altyazılarını işlemez. ASS için Core Text yetmez. | FFmpeg `pgssub`/`ass`/`subrip` + `libass` (ISC) çıkış çözünürlüğünde · Nit'te Metal geçişinde bindirme, Referans'ta üstte SDR katmanı · `MACaptionAppearance` stili | libass sorun çıkarırsa SRT için Core Text kullanılır. | Düşük |
+| **M6** Gömülü altyazı | PGS, ASS ve SRT ekran çözünürlüğünde ve doğru zamanlamayla görünmeli. | AVFoundation MKV altyazılarını işlemez. ASS için Core Text yetmez. | FFmpeg `pgssub`/`dvdsub`/`ass`/`subrip` + `libass` (ISC) çıkış çözünürlüğünde · Nit'te Metal geçişinde bindirme, Referans'ta üstte SDR katmanı · `MACaptionAppearance` stili · **elle gecikme** ±10 s, medya zamanında (§4.11, rev. 6) | libass sorun çıkarırsa SRT için Core Text kullanılır. | Düşük |
 | **M7** Kaynaklar | Files, SMB, Jellyfin ve Plex. | Multicast entitlement'ı Apple onayına bağlı. Files'ın SMB üzerinden aralıklı okuma performansı belirsiz. | `libsmb2` (LGPL) + `NWBrowser` `_smb._tcp` · Jellyfin REST (direct play) · Plex (plex.tv kaynak listesi + token) · URLSession aralık istekleri | Files sağlayıcısının security-scoped URL'i kullanılır. | Orta (AS-3, AS-23) |
 | **M8** Sıfır ayar | İlk açılışta doğru davranış. | iOS 27 SDK'sında sahne yaşam döngüsü ve launch screen zorunlu **[doğrulandı]**. Now Playing, MediaPlayer API'leriyle karıştırılmamalı **[doğrulandı]**. | Kural motoru (parça seçimi) · CloudKit/KVS · `isIdleTimerDisabled` · Now Playing `MediaSession` · `thermalState` tabanlı kalite yöneticisi (yalnızca hesap maliyetini düşürür) | — | Düşük (AS-22) |
 | **M9** AI diyalog | Fısıltı sahnelerinde diyalog anlaşılmalı. | AUSoundIsolation oynatma için tasarlanmamış olabilir. Arka planda ANE kısıtı var. | §5.4 | DSP merkez çıkarma ve DeepFilterNet3 | Orta–yüksek (AS-12) |
@@ -344,7 +349,7 @@ y    = H_eff · f(x)        RGB_out = RGB · y / m   (m = maxRGB, beyaz-göreli)
 - **SDR'da omuz yok:** SDR'ın tepesi zaten beyazdır. Süper beyazlar (Y′ > 1, limited range'de 941–1019 kodları) 1'e kırpılır.
 
 **Uzman parametreleri:**
-- Sahne beyazı: Otomatik (varsayılan) ya da Sabit `L_ref` (80–300 nit) (§3.5.1)
+- Referans beyaz: Sahne bazlı (varsayılan) / Sabit 203 nit / Elle 100–300 nit (§3.5.1; tasarım C-13)
 - Maksimum için `w` (0,90–0,98)
 - SDR `γ` (2,2 / 2,4 / Apple ile eşleşen)
 
@@ -368,7 +373,7 @@ x = L / L_ref                       (kanal başına, beyaz-göreli; §3.4 adım 
 
 | Öncelik | İçerik | Sahne beyazı tahmini `W_s` | Not |
 |---|---|---|---|
-| 0 | Uzman "Sabit" kipi | `L_ref` = kullanıcı değeri (varsayılan 203) | Otomatik devre dışı |
+| 0 | Uzman kipi "Sabit 203" ya da "Elle" | `L_ref` = 203 ya da kullanıcı değeri (100–300) | Sahne bazlı tespit devre dışı |
 | 1 | **DV** (P5, P8.x, P7→8.1), L1 geçerliyse | `W_s = min(k · PQ⁻¹(avg_pq), PQ⁻¹(max_pq))`. **L2/L8 trim** varsa pozlama düzeltmesi uygulanır: `W_s ← W_s / e`. | L1 çekim başına sabittir ve mastering aracı tarafından tüm çekim üzerinden hesaplanır. Bu yüzden çekim içinde pompalama yapısal olarak imkânsızdır ve GPU maliyeti yoktur. `k` başlangıçta 4'tür (algısal ortalamanın ≈ 2 stop üstü). AS-38'de aynı DV içerikteki histogram P90 değerine göre kalibre edilir. |
 | 2 | **HDR10, HLG** ve L1'i geçersiz DV | Kendi histogramımız: `W_s = P90` (aşağıda) | **HDR10+** dinamik meta verisi v1.1'e kadar okunmaz; o zamana kadar histogram kullanılır. |
 | — | MaxFALL / MaxCLL | **Yalnızca başlangıç:** `A₀ = clamp(MaxFALL, 100, 203)`; MaxFALL yoksa 203. Ayrıca `W_s ≤ MaxCLL` (tavan). | MaxFALL en parlak karenin ortalamasıdır ve bir karenin ortalaması diffuse beyazı nadiren aşar. Bu yüzden MaxFALL < 203 olan filmlerde beyazın da 203'ün altında olması beklenir **[doğrulanmalı]**. |
@@ -461,11 +466,11 @@ Kurallar:
 **GPU bütçesi.** Histogram 1/4 çözünürlükte ≈ 0,1–0,3 ms sürer **[ölçülmeli]**. Kesim metriği ve süzgeç CPU'da çalışır; maliyetleri ihmal edilebilir. **Toplam M2 tavanı ≤ 4,5 ms olarak korunur** (§3.10). 4K HDR10'da en kötü durum ≈ 3,6 ms'dir. SDR'da histogram çalışmaz.
 
 **Uzman katmanı ve teşhis:**
-- **Sahne beyazı:** Otomatik (varsayılan) / Sabit (80–300 nit, varsayılan 203).
+- **Referans beyaz:** Sahne bazlı (varsayılan) / Sabit 203 nit / Elle (100–300 nit). Elle aralığı, otomatik kipin güvenlik sınırından (80–300) dardır; elle seçimde aşırı uçlara gerek yoktur.
 - **Sahne sapma sınırı δ:** 0–1 stop (varsayılan 0,5).
 - **Teşhis kartında anlık değer:** "Sahne beyazı: 128 nit → ≈ 1140 nit (0,95 H) · kaynak: HDR10 histogram (P90) · çapa: 135 nit".
-  - Sağdaki nit değeri yalnızca Tepe Kilidi "panel tepesi" durumundayken ve panel tepesi spec değeri olan 1200 nit kabul edilerek, **≈** işaretiyle gösterilir.
-  - Diğer durumlarda yalnızca `H`'nin kesri gösterilir. Panelin nit değeri public API'den okunamıyor.
+  - Sağdaki "≈ Y nit" tahmininin formülü, headroom durumlarına göre gösterim kuralları ve olay akışı §14 G-01'de. Y'yi motor hesaplar (`SceneWhite.displayEstimateNits`); arayüz hesaplamaz.
+  - Panelin nit değeri public API'den okunamadığı için Y her zaman "≈" ile yazılır. Tahmin edilemeyen durumlarda gösterilmez.
 - **Telemetri (CSV):** `W_f`, `Ŵ`, `A`, `L_ref`, `e` (DV trim), kesim olayları ve kaynak türü.
 
 **Başarı ölçütü (AS-38, §10.2):**
@@ -596,6 +601,19 @@ paket → uzunluk önekli NAL taraması → NAL 62 (UNSPEC62) → dovi_parse_uns
   - `contentsScale = 3` (2436×1125 drawable)
 - **`contentsHeadroom` (iOS 26):** Varsayılan bırakılır. S0'da "0 (varsayılan)" ile "`H_pot`" karşılaştırılır. Sistemin panel parlaklığını içeriğin bildirdiği headroom'a göre ayırıyor olma olasılığı var **[doğrulanmalı]**.
 - **Bantlar (letterbox/pillarbox):** Ekranın video dışında kalan kısımları `(0,0,0,1)` ile temizlenir. OLED pikselleri kapalı kalır (P1).
+- **Drawable tam ekrandır, video dikdörtgeni değil (K-33).** Gerekçeler:
+  - Altyazı banda taşınabilsin (§4.7).
+  - Doldur kipi (kıstırma) ve A/B bölmesi drawable'ı değiştirmeden çalışsın.
+  - Dikeyde videonun üste kayması yalnızca katman konum dönüşümüyle yapılabilsin (G-18).
+  - Bedel küçüktür: 16:9 içerikte drawable yazımı ≈ 22 MB yerine ≈ 18 MB olurdu.
+- **Döndürme (yatay ↔ dikey, G-18):** Drawable boyutu değişir (2436×1125 ↔ 1125×2436). Siyah kareyi önlemek için:
+  1. Döndürme animasyonu sürerken eski içerik `contentsGravity = .resizeAspect` ile ölçeklenir; yeni çizim yapılmaz.
+  2. Animasyon bitince tek bir `CATransaction` içinde `presentsWithTransaction = true` yapılır, yeni `drawableSize` ayarlanır, son çözülmüş kare yeniden çizilip sunulur, ardından `presentsWithTransaction = false` yapılır. Bunun için render, son çözülmüş `CVPixelBuffer`'ı tutar.
+  - Geçici yeniden ayırma ≈ 66 MB **[ölçülmeli, Sprint 2]**.
+- **Ayıklama uniform'ları (A/B ve bant haritası, G-17):** `abSplit` (< 0 kapalı; 0…1, video dikdörtgeni içinde ayraç x konumu; solu ham Nit, sağı Temiz Nit), `bandMapAlpha` (0 kapalı, varsayılan 0,4) ve `bandMapColor` (doğrusal P3 `(1, 0, 1)`, SDR seviyesinde).
+  - Karışım `out = mix(out, bandMapColor, bandMapAlpha · mask)`. P-2 korunur.
+  - Ayraç çizgisini shader değil, arayüz katmanı (`ABSplitOverlay`) çizer.
+  - Ham yarı orijinal dokudan, Temiz Nit yarısı Geçiş A'nın çıktısından örnekler. Ek maliyet yok denecek kadar azdır.
 - **Altyazı:** Video ile aynı geçişte, doğrusal EDR uzayında bindirilir. Beyaz = `s_sub` (varsayılan 1,0; ayarlanabilir 1,0…H). Ayrı bir CALayer kullanılmaz; böylece kompozitörde ek katman maliyeti olmaz.
 - **Arayüz:** UIKit/SwiftUI katmanları üstte, SDR'da kalır. Birkaç saniye sonra gizlenir (P2).
 
@@ -651,6 +669,7 @@ paket → uzunluk önekli NAL taraması → NAL 62 (UNSPEC62) → dovi_parse_uns
 | **Arka plan (PiP yok)** | Görüntü yolu durur (Metal ve VT). Ses sürer (`UIBackgroundModes: audio`). Ön plana dönünce son IDR'den yeniden çözülür. | Arka planda Metal komutu gönderilemez. Bu yaygın bilinen bir davranış; Apple belgesinde açık bir ifade bulamadım **[doğrulanmalı]**. Metal ile PiP'in birlikte kullanılamadığı üçüncü parti SDK belgelerinde de geçiyor. |
 | **PiP** | `AVPictureInPictureController.ContentSource(sampleBufferDisplayLayer:playbackDelegate:)` (iOS 15). Kaynak, Referans katmanıdır. PiP içinde görüntü sistem yolundadır: HDR10/DV sistemin işleyişiyle, SDR ise SDR beyazında gösterilir. Kart: "PiP'te Nit kullanılamıyor (sistem kısıtı)". | PiP genelde uygulama arka plandayken açıktır. O sırada GPU'muz yok. Bu bir P-1 ihlali değildir; sistem kısıtıdır ve kullanıcıya açıkça söylenir. |
 | **Otomatik PiP (eve kaydırma)** | Açıksa, Referans katmanı Nit modunda da çözülmüş `CVPixelBuffer`'larla **gölge olarak beslenir** (kopyasız). Katman CAMetalLayer'ın arkasında, opak katmanın altında kalır. | Bunun maliyeti (kompozitör, güç, HDR modunun tetiklenip tetiklenmediği) AS-31'de ölçülür. Maliyetliyse otomatik PiP Nit modunda kapatılır; elle PiP 0,3 s önden doldurmayla başlar. Bilinen hata: ilk PiP denemesi `PGPegasusErrorDomain −1003` ile başarısız olabiliyor (forum) **[doğrulanmalı]**. |
+| **PiP + yazılım çözücü** (AV1, VC-1, MPEG-2; G-16) | **Desteklenir.** Arka planda CPU çalışmaya devam eder (ses arka plan modu + etkin PiP). Kareler IOSurface havuzuna kopyalanıp Referans katmanına verilir. Taramalı içerikte GPU yerine CPU deinterlace kullanılır (FFmpeg `bwdif`; lisansı **[doğrulanmalı]**). PiP düğmesi bu içerikte etkindir. | AV1 1080p PiP'te ≈ 2 çekirdek tüketir **[ölçülmeli, AS-31]**. Isı `.serious` olursa PiP sürer, HUD-05 gösterilir. |
 | **Nit-PiP (deneysel, v1.1)** | Seçenek A: SDR kare, HLG etiketiyle sistemin genişletmesine bırakılır. Seçenek B: CPU'da (vImage) düşük çözünürlüklü PQ kodlama. | İkisi de belirsiz. MVP'ye bağlanmaz (AS-31b). |
 | **AirPlay ses** | `AVSampleBufferAudioRenderer` + `routeSharingPolicy = .longFormVideo`; AirPlay 2 tamponlu çalma. | AirPlay 2 sample buffer API'leri **[doğrulanmalı: WWDC17 "Introducing AirPlay 2"]** |
 | **AirPlay video / ekran yansıtma** | Özel hatta AirPlay video yok. Yansıtmada iPhone ekranındaki Nit sürer. Dış ekran sahnesi varsa video orada **Referans** katmanıyla gösterilir (`UISceneAccessory.externalNonInteractive`, `registerSceneAccessory`, iOS 27). iPhone'da kontroller kalır. | iOS 27 SDK'sında `windowExternalDisplayNonInteractive` sahneleri artık otomatik verilmiyor; `UISceneAccessory` gerekiyor **[doğrulandı: sürüm notu]**. Nit panele özgü bir özellik; dış ekranın kendi headroom'u var. |
@@ -770,12 +789,31 @@ Bunlar uygulamanın aşamayacağı sınırlardır; HUD'da ve teşhis kartında a
 - **PGS:**
   - FFmpeg `pgssub` çözücüsü paletli bit eşlemler üretir. Bunlar RGBA'ya çevrilir (palet BT.709 Y′CbCr) ve Metal dokusuna yazılır.
   - Ekran çözünürlüğüne bicubic ile ölçeklenir. Konum, PGS kompozisyon koordinatları (1920×1080) videonun ekrandaki dikdörtgenine eşlenerek bulunur.
-  - Uzman seçeneği: siyah banda taşıma (P1).
+  - **Boyut ölçeği (uzman, %80–150, varsayılan %100; G-08):** Her kompozisyon nesnesi kendi alt-orta noktası etrafında ölçeklenir ve ekranın güvenli alanına kırpılır. İki nesne çakışırsa dikeyde yığılır.
+  - Uzman seçeneği: siyah banda taşıma (P1). Alt üçte birdeki kompozisyon nesneleri alt banda kaydırılır.
+- **VobSub (DVD bit eşlem altyazı; rev. 6 uyum turunda eklendi, G-07):** FFmpeg `dvdsub` (LGPL) 4 renkli paletli bit eşlem üretir. Palet, MKV `CodecPrivate`'taki idx metninden okunur. Sonrası PGS ile aynı yoldur: ölçek, banda taşıma ve parlaklık. Böylece H-10 ("desteklenmiyor") VobSub için kullanılmaz; DVB teletext gibi başka biçimler için kalır.
 - **ASS/SSA:**
   - `libass` (ISC; FreeType, HarfBuzz ve FriBidi ile) **çıkış çözünürlüğünde** render eder. Yani çizim ekran piksellerinde yapılır; bu, konseptteki "458 ppi" vaadidir.
   - MKV ekindeki fontlar belleğe yüklenir. Glif atlası önbelleğe alınır; olay değişmezse yeniden çizilmez.
 - **SRT:** Varsayılan ASS stiline çevrilip libass ile çizilir. Stil, sistemin `MACaptionAppearance` profilinden okunur: boyut, renk, kenar ve arka plan.
-- **Zamanlama:** Altyazılar aynı medya saatine göre seçilir. Nit'te render geçişinde bindirilir; Referans'ta üstteki SDR `CAMetalLayer`'da çizilir.
+- **SRT ve ASS'te siyah banda taşıma (G-06):**
+  - `ass_set_frame_size` ekran boyutuna, `ass_set_storage_size` video boyutuna ve `ass_set_margins` bant boylarına ayarlanır. Ardından `ass_set_use_margins(1)` çağrılır.
+  - libass bu durumda **konumlandırılmamış** (regular) olayları banda yerleştirir. `\pos` ve `\move` ile konumlanmış tabelalar video alanında kalır **[doğrulandı: libass `ass.h`]**.
+  - 2,39:1 içerikte yatay ekranın alt bandı ≈ 53 px'tir; tek satır sığar. Taşan satırlar videonun alt kenarına doğru uzar.
+- **Parlaklık (G-05):** `s_sub = H_eff^t`, `t ∈ [0, 1]`, varsayılan `t = 0` (SDR beyazı). `s_sub` her karede uniform olarak verilir.
+  - `s_sub ≤ H_eff ≤ H_cur` olduğundan P-2 korunur.
+  - Headroom değişince altyazı videoyla orantılı kalır.
+  - Referans'ta altyazı katmanı **SDR**'dır (`wantsExtendedDynamicRangeContent = false`) ve kaydırıcı devre dışıdır. Teknik olarak EDR olabilirdi, ama "disk neyse o" ilkesi ve video katmanının sistem HDR sunumunu etkileyebilecek ikinci bir EDR katmanından kaçınmak için SDR seçildi.
+- **Otomatik parça seçimi (S1) ve erişilebilirlik tercihleri (G-09):**
+  - `MACaptionAppearanceGetDisplayType(.user)`:
+    - `.alwaysOn`: altyazı her zaman açık (dil tercihine göre)
+    - `.automatic`: ses dili sistem dilinden farklıysa açık
+    - `.forcedOnly`: yalnızca zorunlu (forced) altyazı
+  - `MACaptionAppearanceCopyPreferredCaptioningMediaCharacteristics(.user)` SDH tercihini içeriyorsa (`public.accessibility.describes-music-and-sound`), aynı dildeki `AV_DISPOSITION_HEARING_IMPAIRED` bayraklı ya da adında "SDH" geçen parça öne alınır.
+  - `MAAudibleMediaCopyPreferredCharacteristics()` sesli betimleme tercihini içeriyorsa (`public.accessibility.describes-video`), `VISUAL_IMPAIRED` veya `DESCRIPTIONS` bayraklı ses parçası öne alınır. Bu kural, kayıpsız ses önceliğinin de önüne geçer.
+  - Yorum parçaları (`COMMENT`) atlanır. `FORCED` parça otomatik açılır.
+  - API'ler **[doğrulandı: MediaAccessibility]**. Bayraklar MKV'nin `FlagHearingImpaired`, `FlagVisualImpaired` ve `FlagCommentary` alanlarından gelir.
+- **Zamanlama:** Altyazılar aynı medya saatine göre seçilir. Elle gecikme ofseti uygulanır (§4.11). Nit'te render geçişinde bindirilir; Referans'ta üstteki SDR `CAMetalLayer`'da çizilir.
 - **Bütçe:** Olay değiştiğinde ≤ 2 ms CPU (libass); bindirme 0,1 ms GPU **[ölçülmeli]**.
 
 ### 4.8 Deinterlace ve telecine
@@ -787,6 +825,103 @@ Bunlar uygulamanın aşamayacağı sınırlardır; HUD'da ve teşhis kartında a
 ### 4.9 Judder
 
 §3.8'e bakın.
+
+### 4.10 Oynatma hızı 0,5×–2× (M1, rev. 6)
+
+**Mekanizma:**
+- **Hız:** `AVSampleBufferRenderSynchronizer.setRate(_:time:)` ile değişir **[doğrulandı]**. Synchronizer'a bağlı bütün renderer'lar (ses ve Referans videosu) aynı hızı izler. Nit yolu medya zamanını synchronizer'ın timebase'inden okuduğu için (§3.8) ek bir şey gerekmez.
+- **Perde koruma:** `AVSampleBufferAudioRenderer.audioTimePitchAlgorithm` kullanılır. Değerler: `timeDomain`, `spectral`, `varispeed` **[doğrulandı]**.
+  - Film ve dizide **`.timeDomain`** seçilir. Apple bunu konuşma için uygun ve daha ucuz olarak tanımlıyor; filmlerde diyalog belirleyicidir.
+  - Müzikte MVP'de hız yoktur. Eklenirse `.spectral` kullanılır.
+  - Uzman seçeneği `.varispeed`: perde değişir, artefakt en azdır.
+  - Algoritma oynatma başlamadan ayarlanır. Oynatma sırasında değiştirmek flush gerektirebilir **[doğrulanmalı]**.
+- **iOS 27 Receiver API'siyle ilişkisi:** `audioTimePitchAlgorithm` renderer'ın deprecated olmayan bir özelliğidir. `Receiver` yalnızca besleme ve flush'ı üstlenir **[doğrulandı: belge konu listesi]**. Hız synchronizer'da tutulduğu için Receiver ile çakışmaz.
+- **Aralık:** 0,5–2,0. Motor bu aralığı kod düzeyinde sınırlar. Kademeleri arayüz belirler; öneri: 0,5 / 0,75 / 1 / 1,25 / 1,5 / 1,75 / 2.
+- **Değişim anı:** Oynatma noktasında, `setRate(r, time: synchronizer.currentTime())` ile.
+- **Now Playing:** `MediaCommand.changePlaybackRate(supported:)` (iOS 27) **[doğrulandı]**.
+- **Kalıcılık:** Her yeni dosya 1× ile başlar. Uzman katmanında "Hızı hatırla" seçeneği dosya bazında hatırlar.
+
+**Native Atmos.** Renderer'ın sıkıştırılmış E-AC-3 JOC'u 1× dışında perdeyi koruyarak Atmos olarak render edip etmediği bilinmiyor **[doğrulanmalı, AS-39]**.
+- **Varsayılan tasarım:** 1× dışında ses PCM'e (5.1/7.1 yatak) çözülür. Olay `atmosDecodedToPCM(reason: .playbackRate)` yayımlanır.
+- 1×'e dönülünce 2 s sonra native Atmos'a geri geçilir.
+- AS-39 native yolun hızla doğru çalıştığını gösterirse (Atmos göstergesi yanar, perde korunur) PCM'e çözme kaldırılır.
+
+**Etkileşimler:**
+
+| Bileşen | 1× dışında davranış |
+|---|---|
+| Bit-perfect | Bozulur. Sinyal yolu: "Bit-perfect değil · hız 1,5×". Müzikte MVP'de hız yok. |
+| M9 diyalog | Önden evre medya zamanında çalıştığı için algoritma etkilenmez. Ama gerçek zamandaki yük hızla çarpılır: 2×'te AUSoundIsolation bütçesi ≤ %40 P çekirdeği. Aşılırsa F1'e geçilir (200 ms çapraz geçiş). Sound Analysis için de aynısı geçerli. |
+| M10 boost ve limiter | Medya zamanında çalışır ve renderer'ın zaman-perde dönüşümünden **önce** gelir. `timeDomain`'in birleştirme noktaları küçük tepe aşımı üretebilir. AS-39'da ölçülür; gerekirse 1× dışında tavan −1,5 dBTP'ye çekilir. |
+| Parametre değişim gecikmesi | Geç evrenin ufku medya zamanındadır (150–250 ms). Gerçek zamanda bunun 1/r katı: 2×'te ≈ 100 ms, 0,5×'te ≈ 400 ms. |
+| Önden evre tamponu | 1 s medya = 2×'te 0,5 s gerçek zaman. Üretici bu durumda iki kat hızlı çalışır. |
+| A/V senkronu | Synchronizer sağlar, değişmez. BT gecikme telafisi (§5.7) gerçek zamanda tanımlı olduğu için hızdan etkilenmez. |
+| "Kesin kadans" | 1× dışında kapalıdır; kendisi zaten 1,001 hız hilesi kullanır. |
+| İçeriğe bağlı süzgeçler | `L_ref`, N1 histerezisi, M9 gevşetmesi ve boost yöneticisi **medya zamanında** tanımlıdır; içerik açısından davranış aynı kalır. Sisteme bağlı headroom süzgeci (§3.6) gerçek zamanda çalışır. |
+
+**Video kare zamanlaması.** Seçim kuralı (§3.8) hızdan bağımsızdır: medya zamanı synchronizer'dan okunur ve her vsync'te `PTS ≤ t_v + ½·T_vsync` koşulunu sağlayan en büyük PTS'li kare seçilir.
+
+| Hız (23,976 içerik) | Sunum hızı | vsync/kare (60 Hz) | Kalıp |
+|---|---|---|---|
+| 0,5× | 11,99 fps | 5,005 | 5 (≈ 16,7 s'de bir 6) |
+| 0,75× | 17,98 fps | 3,337 | 3, 3, 4 |
+| 1,25× | 29,97 fps | 2,002 | 2 |
+| 1,5× | 35,96 fps | 1,668 | 2, 2, 1 |
+| 1,75× | 41,96 fps | 1,430 | 1 ve 2 karışık |
+| 2× | 47,95 fps | 1,251 | 1, 1, 1, 2 |
+
+- **24p'de 2×'te kare düşmez** (47,95 < 60).
+- **60p içerik 2×'te** 120 fps eder; her ikinci kare bilerek atlanır. 4K'da çözücü yükü için **referans olmayan kareler** (HEVC "sub-layer non-reference" NAL tipleri) çözülmeden atlanabilir **[ölçülmeli]**.
+- **24p 4K 2×** = 48 fps HEVC çözme demektir; A13'ün donanım çözücüsünün sınırı içinde olması beklenir **[ölçülmeli]**.
+- **Yazılım çözücüler** (AV1, VC-1, MPEG-2): 2×'te CPU yükü iki katına çıkar. Yetmezse sunum kareleri atlanır ve Bilgi panelinde "hız için kare atlanıyor" yazar. Ses kesilmez.
+
+**Nit ve Temiz Nit bütçesi.** Kare başına bütçe değişmez (≤ 4,5 ms). Saniyedeki iş, sunulan kare sayısıyla ölçeklenir:
+- 24p'de 2× → 48 çizim/s → GPU'nun ≈ %22'si.
+- En kötü durum 60 Hz tavanıdır (≈ %27), 1×'teki 60p ile aynı.
+- Isıl kademe (§3.10) aynı kalır.
+
+**Altyazı zamanlaması.** Altyazı medya zamanına göre seçildiği için hızla kendiliğinden ölçeklenir. ASS animasyonları (`\move`, `\t`, karaoke) da medya zamanındadır. Elle gecikme de medya zamanında uygulanır (§4.11).
+
+**Referans ve PiP:**
+- Referans katmanı synchronizer'a bağlı olduğu için hızı izler. DV içerik 2×'te sistem çözücüsünde 4K48 demektir **[ölçülmeli]**.
+- PiP'te hız `AVPictureInPictureSampleBufferPlaybackDelegate` üzerinden aynı motor komutuna bağlanır.
+
+### 4.11 Elle altyazı gecikmesi (M6, rev. 6)
+
+**Tanım:**
+- Gecikme `d` ms cinsindendir. Pozitif `d` altyazıyı geç gösterir.
+- Altyazı saati: `t_sub = t_media − d`. Olaylar `t_sub`'a göre seçilir.
+
+**Ofset medya zamanında mı, gerçek zamanda mı? Medya zamanında.**
+- Gerekçe: Dosyadaki kayma medya zaman çizelgesinde oluşur (farklı kurgu, farklı başlangıç noktası).
+- Örnek: 500 ms'lik bir medya kayması 2×'te 250 ms gerçek zamana denk gelir ve diyalogla hizalı kalır.
+- Ofset gerçek zamanda tanımlansaydı hız her değiştiğinde hizalama bozulurdu.
+
+**Biçim bazında davranış:**
+- **ASS ve SRT (libass):** `ass_render_frame(renderer, track, now: t_sub)` çağrılır; animasyon ve karaoke de ofsetle kayar. Metin olayları demux'tan PTS sırasıyla gelir ve libass track'ine eklenir.
+- **PGS ve VobSub:** Çözülen ekran kümeleri (display set) PTS'leriyle bir kuyrukta tutulur. `PTS ≤ t_sub` koşulunu sağlayan son küme gösterilir. Epoch ve acquisition point mantığı değişmez.
+- **Görüntüye yakılmış altyazı:** Ayarlanamaz. Seçili altyazı parçası yoksa arayüz gecikme satırını gizler.
+
+**Negatif gecikme ve demux önden okuma:**
+- Demux'un paket kuyruğu ≈ 2–3 s öndedir. Bu süreden küçük negatif gecikmelerde altyazı olayları zaten eldedir.
+- Daha büyük negatif değerlerde (altyazı erken), **yalnızca altyazı akışı için** ikinci bir libavformat bağlamı `abs(d) + 2 s` önden okur. Diğer akışlar `AVDISCARD_ALL` ile atlanır: G/Ç yine akar, ama veri saklanmaz.
+- Yerel dosyada maliyet önemsizdir. SMB'de 10 s × 80 Mb/s ≈ 100 MB ek okuma demektir. Bağlantı bit hızının en az 2 katıysa sorun olmaz; değilse ek okuma düşük öncelikle ve gecikme sınırına kadar yapılır **[ölçülmeli]**.
+
+**Adım ve sınırlar:**
+- Adım **50 ms** (dokunuş başına). Basılı tutunca 0,5 s sonra 250 ms'lik adımlara geçilir.
+- Aralık **−10 s … +10 s**. "Sıfırla" seçeneği vardır.
+- Kare süresi (41,7 ms) adım olarak seçilmedi; altyazı zamanları ms çözünürlüklüdür.
+- Değişiklik bir sonraki çizimde (≤ 1 kare) görünür. Nit'te altyazı bindirmesi yeniden çizimi tetikler.
+
+**Dosya bazında kalıcılık:**
+- Değer `(dosya kimliği, altyazı parçası kimliği)` anahtarıyla kütüphanede (SwiftData) saklanır.
+- Dosya kimliği: kaynak + yol + boyut + değiştirme zamanı. Taşınan dosyaları eşlemek için içerik özeti de tutulur (ilk ve son 1 MB'ın SHA-256'sı).
+- Parça değiştirilince o parçanın kayıtlı değeri yüklenir; kayıt yoksa 0 kullanılır.
+- Yeni bir dosya her zaman 0 ile başlar (sıfır ayar).
+
+**Motor arayüzü:** Komut `setSubtitleDelay(Duration)`, olay `subtitleDelayChanged(Duration)` (§14 G-04).
+
+**Kapsam:** Otomatik senkron hâlâ kapsam dışıdır (kullanıcı kararı). Test: AS-39(c).
 
 ---
 
@@ -1290,8 +1425,15 @@ Development ve büyük olasılıkla ad hoc imzalı uygulamalar için iPhone'da *
 | `SubtitleKit` | PGS, libass, SRT, `MACaptionAppearance` eşlemesi | FFmpeg, libass | Kısmen |
 | `PlaybackEngine` | Actor; durum makinesi; synchronizer; Now Playing; kalite yöneticisi | Hepsi | Hayır |
 | `Sources` / `Library` | SMB keşfi, Jellyfin/Plex istemcileri, SwiftData, TMDB | MediaIO | Kısmen |
-| `Diagnostics` | HUD, Laboratuvar, CSV, `OSLogStore`, MetricKit | — | — |
-| `App` | SwiftUI sahneleri, oynatıcı görünümü (UIKit `UIViewRepresentable`) | — | — |
+| `Diagnostics` | **Arayüzsüz** (G-19): telemetri kaydedici (diskte 3 saatlik ikili halka), CSV dışa aktarımı, `OSLogStore`, MetricKit | — | Evet (kayıt biçimi) |
+| `DesignSystem` (tasarım §9.7) | `DSCore` (saf Swift: token'lar, zincir dilbilgisi, sayı biçimleri, HUD metinleri) + `DesignSystem` (SwiftUI bileşenleri, OLED adacığı, HUD) | — (motor modüllerine bağlı değil) | `DSCore` evet |
+| `App` | SwiftUI sahneleri, `Features/*` (Lab dahil), oynatıcı görünümü (UIKit `UIViewRepresentable`) | `PlaybackEngine` (kamuya açık yüz), `Library`, `Sources`, `DesignSystem`, `Diagnostics` | — |
+
+**Sınır kuralları (tasarım §9.7 ile aynı):**
+- `App` motorla yalnızca `PlaybackEngine`'in kamuya açık yüzü üzerinden konuşur: `EngineCommand`, olay ve anlık görüntü akışları, `VideoOutput` (§14 G-04).
+- `NitCore`, `AudioCore` ve `DSPKit` arayüzden doğrudan çağrılmaz.
+- `App`, arayüzsüz `Diagnostics`'i yalnızca kayıt, dışa aktarma ve arayüz durumu bildirimi (`chromeVisible`, `panel`) için içe aktarır.
+- Toplam 16 modül; XcodeGen'in yeniden değerlendirme eşiği (25) altında.
 
 ```mermaid
 graph TD
@@ -1341,66 +1483,223 @@ graph TD
 - **Sembolleştirme:** dSYM, CI artifact'ı olarak saklanır. Cihazdaki çökme raporu (Ayarlar → Analizler) paylaşılır ve Linux'ta `llvm-symbolizer` ya da macOS işinde `atos` ile sembolleştirilir.
 - **GPU zamanı:** `gpuStartTime` / `gpuEndTime`. **CPU:** `thread_info`. **Bellek:** `phys_footprint` ve `os_proc_available_memory`.
 
+**Telemetri kaydı ve CSV şeması (S0'dan itibaren; G-20 dahil):**
+- **Kayıt biçimi:** Sunulan her kare için bir satır, sabit boyutlu ikili kayıt (≈ 128 B). Diskte 3 saatlik döngüsel halka: 60 Hz'de ≈ 83 MB. Olaylar ayrı satır türüdür.
+- **Dışa aktarım:** CSV. Ya tam çözünürlükte ya da 1 Hz özet olarak. Dosyanın başına o anki parametre kümesi yazılır.
+
+| Grup | Sütunlar |
+|---|---|
+| Zaman | `t_host_s`, `t_media_s`, `frame_pts_s`, `rate`, `event` |
+| Ayarlar | `mode`, `curve`, `w`, `kappa`, `gamma`, `dither_b`, `scaler`, `contents_headroom` |
+| Headroom | `H_cur`, `H_pot`, `H_s`, `H_eff`, `out_max`, `out_apl`, `p1_ok`, `p2_ok` |
+| Parlaklık | `brightness`, `brightness_entry`, `peak_lock`, `b_k`, `headroom_status`, `S_b_est` (§14 G-01) |
+| Sistem | `thermal`, `low_power`, `capture`, `mem_mb`, `battery_pct` |
+| Kare | `gpu_ms`, `dropped`, `present_err_ms`, `cadence_slot`, `vsync_period_ms` |
+| Sahne beyazı (S0b) | `L_ref`, `W_f`, `anchor`, `trim_e`, `sw_source`, `scene_cut` |
+| Arayüz (G-20) | `chromeVisible` (0/1), `panel` (`none` / `display` / `audio` / `subtitle` / `info` / `more`) |
+
 ---
 
 ## 10. Spike listesi
 
-### 10.1 S0: Nit Çekirdeği minimum prototipi (İLK İŞ)
+### 10.1 S0: Nit Çekirdeği prototipi = "Nit Laboratuvarı" (İLK İŞ)
 
-**Amaç:** Ürünün 1 numaralı vaadini ilk haftada cihazda kanıtlamak ya da çürütmek. Aynı zamanda CI/imza hattını ve ölçüm araçlarını ayağa kaldırmak.
+> **Uygulama notu: S0 v0.1'de bilinçli sadeleştirmeler.** Bu bölümdeki hedef yapıdan sapan noktalar aşağıda. Hepsi S0'ın "panel tepeyi veriyor mu?" sorusunu daha hızlı cevaplamak için yapıldı.
+>
+> 1. **Kod çözme ve senkron:** `AVAssetReader` + `VTDecompressionSession` yerine `AVPlayer` kullanılıyor.
+>    - Nit yolu kareleri `AVPlayerItemVideoOutput` (10-bit `x420` / 8-bit `420v`, `AVVideoAllowWideColorKey`) üzerinden alıyor.
+>    - Referans yolu aynı oynatıcının `AVPlayerLayer`'ı.
+>    - Bu sayede iki yol aynı saatte kalıyor; Nit ↔ Referans geçişi yalnızca katman görünürlüğü (K6).
+>    - Kendi demux ve VT hattımız S2'de, MKV ile birlikte gelecek.
+> 2. **Modül yapısı:** `Packages/NitMath`, Linux'ta test edilen saf Swift paketi olarak ayrı. Geri kalan her şey uygulama hedefinin klasörlerinde:
+>    - `App/Sources/NitCore`
+>    - `App/Sources/Lab`
+>    - `App/Sources/Diagnostics`
+>    - `App/Sources/DesignSystem`
+>
+>    §9.1'deki paket bölünmesi, motor S2'de büyüyünce yapılacak. S0'da tek bir hedef, ilk CI derlemesini basit tutuyor.
+> 3. **Desenler:** Video dosyası olarak üretilmiyor; Nit shader'ında prosedürel olarak çiziliyor (`TestAssets/` gerekmiyor). Bu yüzden yalnızca Nit yolunda görünüyorlar.
+> 4. **v0.2'ye kalanlar:**
+>    - Eşitlik testi (S0-C), tonalite testi (S0-D)
+>    - Bicubic ölçekleyici; şimdilik bilineer
+>    - `present(at:)` ile vsync hizalı sunum
+>    - İmzalı `release.yml`; şimdilik imzasız IPA üretiliyor, kullanıcı Sideloadly ile kendi hesabıyla imzalıyor
+> 5. **Dil ve hedef:** Swift 5 dil modu (minimal eşzamanlılık denetimi) ve iOS 18.0 dağıtım hedefi. Amaç, runner'daki mevcut Xcode ile derlemek. Swift 6 katı mod ve iOS 27.0 hedefi S2'de açılacak.
 
-**Süre:** 6–8 iş günü (1–2 günü CI ve imza iskeleti).
+**Amaç:**
+- Ürünün 1 numaralı vaadini ilk haftada cihazda kanıtlamak ya da çürütmek.
+- CI/imza hattını ve ölçüm araçlarını ayağa kaldırmak.
+- Oynatıcıya taşınacak bileşenleri (headroom göstergesi, mod anahtarı, HUD, OLED adacığı) ilk günden gerçek EDR içerik üstünde sınamak (tasarım §9.1).
 
-**Kapsam:**
-- **Uygulama iskeleti:** XcodeGen; SwiftUI App, sahne tabanlı, launch screen; iOS 27.0 hedefi. `release.yml` ile imzalı IPA üretilir ve OTA ya da Sideloadly ile cihaza kurulur.
-- **Tek ekran:** Tam ekran video görünümü. Üst üste iki katman:
-  - Üstte `CAMetalLayer` (Nit)
-  - Altta `AVSampleBufferDisplayLayer` (Referans)
-- **İnce kontrol şeridi:**
-  - **Nit / Referans** anahtarı
-  - **Maksimum / Dengeli** (HDR'da)
-  - **Tepe Kilidi** açık/kapalı
-  - **Titreşim** açık/kapalı
-  - **Eşitlik testi** düğmesi
-  - **Kaydı dışa aktar** (CSV)
-- **Headroom göstergesi (HUD):** `H_cur`, `H_pot`, `H_s`, `H_eff`, `brightness`, durum ("kaydırıcı sınırlı / panel tepesi / ısı / Düşük Güç Modu / sistem kıstı"), `thermalState`, `sceneCaptureState`, GPU ms (p50/p95), düşen kare, kadans kalıbı, çıkış maksimumu ≤ `H_cur` doğrulaması.
-- **Girdiler:**
-  1. Yerel bir SDR dosyası: 1080p H.264 8-bit BT.709 MP4.
-  2. Yerel bir HDR10 dosyası: 4K HEVC Main10 PQ BT.2020 MP4 (MDL/MaxCLL meta verili).
-  3. Files'tan içe aktarma.
-  4. CI'da ffmpeg ile üretilip uygulamaya gömülen **test desenleri:**
-     - %1/10/25/50/100 beyaz pencereler (SDR ve PQ 1000/4000/10000 nit)
-     - İnce ve karanlık rampalar (AS-33)
-     - 23,976 fps kadans klibi (kare sayaçlı, kayan çubuklu)
-     - SDR gri rampası (γ eşleme)
+**Süre:** 7–9 iş günü:
+- 1–2 gün CI ve imza iskeleti
+- ≈ 1 gün Laboratuvar arayüzü (tasarım §9.1)
+- Kalan süre Nit hattı ve ölçümler
+
+**Native bağımlılık kararı: S0'da yok (K-31).**
+- S0'ın bütün girdileri MP4 ve MOV dosyalarıdır. Kullanılan yığın: `AVAssetReader` (sıkıştırılmış örnekler) + VideoToolbox + `AVSampleBufferDisplayLayer` + `AVSampleBufferAudioRenderer` + Metal. **FFmpeg, libdovi, libass ve libsmb2 gerekmez.**
+- **Gerekçeler:**
+  1. İlk CI derlemesi bağımlılık derlemesini beklemez; yalnızca Xcode ve XcodeGen gerekir (≈ 6–10 dk).
+  2. S0'ın sorusu (panel, headroom, GPU bütçesi) demux'tan bağımsızdır.
+  3. `AVAssetReader`'ın ürettiği `CMSampleBuffer` arayüzü, üretimde libavformat kaynağının üreteceği arayüzle aynıdır (`Demux.PacketSource` protokolü). Yazılan kod atılmaz.
+  4. Kullanıcının MKV filmleri PC'de MP4'e kopyalanabilir: `ffmpeg -i film.mkv -map 0:v:0 -map 0:a:0 -c copy -tag:v hvc1 film.mp4` (S0b'deki 5 HDR10 film için de).
+- `deps.yml` 1. haftada paralel başlar; S0 derlemesi ona bağlı değildir.
+
+**Kapsam (tasarım §9.1 ile hizalı):**
+- **Açılış ekranı:** Uygulama doğrudan **Laboratuvar köküyle (E-60)** açılır. Üç satır:
+  - Nit Laboratuvarı (E-61)
+  - Ses Laboratuvarı (E-62): S0'da boş bir yer tutucu, S5'te dolar
+  - Tasarım Kataloğu (E-63): S0'da yalnızca S0 bileşenleri
+- **E-61:** Yalnızca yatay. Beş kip:
+  - S0-A: dosya paneli
+  - S0-B: oynatma, HUD ve şerit
+  - S0-C: eşitlik testi
+  - S0-D: tonalite testi
+  - S0-E: parametreler
+  - HUD, şerit ve kayıt göstergesi tasarım §9.1'deki gibidir. HUD 2 Hz'de, headroom göstergesi 10 Hz'de güncellenir.
+- **Gömülü kısa klipler:** CI'da ffmpeg + x264/x265 ile üretilir. Her biri 10–30 sn, döngülü; toplam ≲ 40 MB. x264 ve x265 (GPL) yalnızca araç olarak kullanılır; üretilen dosyalar GPL değildir.
+  - SDR örnek: 1080p H.264 8-bit 709; gri tonlar, renk çubukları, hareket
+  - HDR10 örnek: 4K HEVC 10-bit PQ 2020; MDL 1000, MaxCLL 1000; `hvc1` etiketli
+  - Beyaz pencereler: SDR ve PQ 1000/4000/10000 nit × %1/10/25/50/100
+  - İnce ve karanlık rampalar (AS-33)
+  - 23,976 fps kadans klibi (kare sayaçlı)
+  - SDR gri rampa (γ)
+  - **Okunabilirlik deseni:** %100 PQ 10000 nit (K-T1)
+- **Gerçek filmler:** Tasarımdaki "10 dk" örnekler IPA'ya **gömülmez**; 4K HEVC 10 dk ≈ 0,5–1 GB tutar. Kullanıcı bunları bir kez Dosyalar'dan açar; yer imi saklanır ve "Son açılanlar"da görünür. Tasarım S0-A'daki "Gömülü örnekler" başlığını "Kısa örnekler (gömülü)" ve "Son açılanlar" olarak ayırmalı **[tasarım ajanına not]**.
 - **Hat:**
-  - `AVAssetReader` (sıkıştırılmış) → `VTDecompressionSession` (`x420`/`420v`) → Metal Geçiş B (adım 1–5 ve 6). Temiz Nit (Geçiş A) S1'de eklenir. Ölçekleme tek geçişte, bicubic.
-  - Ses: AAC sıkıştırılmış olarak `AVSampleBufferAudioRenderer`'a; synchronizer ana saat.
-  - Headroom denetleyicisi ve Tepe Kilidi (§3.6). Kare zamanlayıcısı (§3.8). Referans geçişi (§3.11).
-- **Kapsam dışı:** MKV/FFmpeg, DV, altyazı, PiP, SMB, M9 ve M10. S0'da HDR'da `L_ref` sabit 203 nittir. Sahne bazlı tespit hemen ardından S0b'de eklenir.
+  - `AssetReaderSource` (sıkıştırılmış) → `VTDecompressionSession` (`x420`/`420v`) → Metal Geçiş B (adım 1–5 ve 6). Ölçekleme tek geçişte, bicubic.
+  - Ses: AAC sıkıştırılmış olarak `AVSampleBufferAudioRenderer`'a gider; synchronizer ana saattir.
+  - Headroom denetleyicisi ve Tepe Kilidi (§3.6), kare zamanlayıcısı (§3.8), Referans geçişi (§3.11).
+  - **Eşitlik testi:** Referans yarısında PQ klibi `AVSampleBufferDisplayLayer`'da, Nit yarısında shader'da `SDR beyazı × H` gösterilir. İki katman aynı anda görünür; her biri yarım ekranlık bir çerçevede durur.
+  - **Tonalite testi:** SDR gri rampa iki yolda yan yana.
+- **Telemetri (G-19, G-20):** Arayüzsüz `Diagnostics`; şema §9.4 (`chromeVisible` ve `panel` dahil). Son 3 saat döngüsel tutulur.
+- **Kapsam dışı:** MKV/FFmpeg, DV, altyazı, PiP, SMB, M9, M10, oynatma hızı ve sahne bazlı `L_ref`. S0'da HDR'da `L_ref` sabit 203 nittir; sahne bazlı tespit hemen ardından S0b'de eklenir.
 
-**Başarı ölçütleri:**
+**Başarı ölçütleri:** K1–K11 ve tasarımın K-T1–K-T4 ölçütleri.
 
 | # | Ölçüt | Eşik |
 |---|---|---|
-| K1 | CI ve kurulum | `release.yml` ≤ 20 macOS dakikasında imzalı IPA üretir. Uygulama iOS 27.0.1'de açılır. |
-| K2 | **AS-26 tepe** | Kayıtta çıkış beyazı her karede `H_eff` ile eşleşir (±%0,5). Eşitlik testinde 5 denemenin ≥ 4'ünde "fark yok" ya da göreli ölçüm farkı ≤ %10. Kaydırıcı %25/50/75/100'deyken headroom tablosu çıkar. Tepe Kilidi açıkken kaydırıcı %10'da da tepeye ulaşılır. |
+| K1 | CI ve kurulum | `release.yml` native bağımlılık olmadan ≤ 15 macOS dakikasında imzalı IPA üretir. Uygulama iOS 27.0.1'de açılır. |
+| K2 | **AS-26 tepe** | Kayıtta çıkış beyazı her karede `H_eff` ile eşleşir (±%0,5). Eşitlik testinde 5 denemenin ≥ 4'ünde "Aynı" ya da göreli ölçüm farkı ≤ %10. Kaydırıcı %25/50/75/100'deyken headroom tablosu çıkar. Tepe Kilidi açıkken kaydırıcı %10'da da tepeye ulaşılır. `S(b)` tablosu (§14 G-01) en az 5 noktada öğrenilir. |
 | K3 | **AS-29 maliyet** | 4K HEVC 10-bit → 2000×1125 için GPU p95 ≤ 3,0 ms. 1080p 8-bit için p95 ≤ 1,5 ms. |
-| K4 | Kare ve kadans (AS-5'in bir kısmı) | 10 dk'da 0 kare kaybı. 23,976'da `presentedTime` farkları 3:2 kalıbına uyar. 16,7 s'lik döngüde en fazla 1 beklenen düzeltme olur, beklenmeyen sapma 0. Hedef vsync'ten sapma < 1 ms. |
-| K5 | Headroom uyumu | Oynatma sırasında kaydırıcı oynatılınca kayıtta `çıkış_max ≤ H_cur` her zaman sağlanır (kırpma yok). Kör izlemede flaş görülmez. Açılış rampası ≤ 1 s. |
+| K4 | Kare ve kadans (AS-5'in bir kısmı) | 10 dk'da 0 kare kaybı. 23,976'da `presentedTime` farkları 3:2 kalıbına uyar. 16,7 s'lik döngüde en fazla 1 beklenen düzeltme var, beklenmeyen sapma 0. Hedef vsync'ten sapma < 1 ms. |
+| K5 | Headroom uyumu | Kaydırıcı oynatma sırasında hareket ettirilince kayıtta `çıkış_max ≤ H_cur` her zaman sağlanır (kırpma yok). Kör izlemede flaş görülmez. Açılış rampası ≤ 1 s. |
 | K6 | Nit ↔ Referans | Geçiş ≤ 500 ms. Siyah kare yok. Ses kesilmez. |
-| K7 | **AS-33** | Rampa testiyle "6. adım gerekli mi / b = 8 mi 10 mu" kararı kayda geçer. |
-| K8 | **AS-28 (erken)** | Nit + Tepe Kilidi, Nit (kilit kapalı) ve Referans ile birer 2 saatlik döngü. CSV'de headroom çöküşü olup olmadığı ve çökerse beyazın ≥ SDR tepesinde kalıp kalmadığı görülür. Isı ve pil kaydedilir. |
-| K9 | P-1 uyumu | Kayıtta oynatma boyunca `brightness`'ın hiç azalmadığı doğrulanır (otomatik kontrol). |
+| K7 | **AS-33** | Rampa testiyle "6. adım gerekli mi?" ve "b = 8 mi 10 mu?" kararları kayda geçer. |
+| K8 | **AS-28 (erken)** | Üç kipte 2'şer saatlik döngü: Nit + Tepe Kilidi, Nit (kilit kapalı) ve Referans. CSV'de headroom çöküşü olup olmadığı, çökerse beyazın SDR tepesinde kalıp kalmadığı görülür. Isı ve pil kaydedilir. |
+| K9 | P-1 uyumu | Oynatma boyunca `brightness`'ın hiç azalmadığı kayıttan otomatik olarak doğrulanır. |
 | K10 | Bellek | `phys_footprint` tepe < 600 MB |
-| K11 | SDR tonalitesi | γ eşleme testi sonucunda SDR varsayılan γ değeri seçilir. |
+| K11 | SDR tonalitesi | Tonalite testi (S0-D) sonucunda varsayılan SDR γ seçilir. |
+| **K-T1** (G-02) | Okunabilirlik | "Okunabilirlik deseni"nde (%100 PQ 10000 nit) HUD, şerit ve toast metinleri kör değerlendirmede 3/3 okunur. Ekran fotoğrafı rapora eklenir. Kompozitörün doğrusal ışıkta karıştırma varsayımı teyit ya da çürütülür. Opak zemin kuralı (tasarım R-1) sonucu bu varsayıma bağımlı kılmaz. |
+| **K-T2** (G-03) | Arayüz maliyeti | Şerit görünür, şerit gizli ve Parametreler paneli açık durumlarında 10'ar dk kayıt (`chromeVisible`, `panel` sütunları). Üç durumda da 0 düşen kare. `present_err_ms` p95 farkı < 0,2 ms. **Ek:** 2 × 30 dk pil karşılaştırması (arayüz katmanı yok / sabitlenmiş istatistik açık). Sistemin tek opak tam ekran katmanı için daha ucuz bir ekran yolu kullanıp kullanmadığı public API ile görülemez; yalnızca bu yolla dolaylı ölçülür **[doğrulanmalı]**. |
+| **K-T3** | Tek dokunuş | Nit ↔ Referans geçişi şeritten tek dokunuşla yapılır. Ana thread'de > 50 ms engel olmaz (geçiş motorun thread'lerinde yürür). |
+| **K-T4** | HUD | Düşük Güç Modu açılıp kapanınca ve headroom çöküşü olunca HUD-01, 03 ve 04 doğru metinle ve tekrar sınırlarına uyarak çıkar. Bu, motor olaylarıyla (§14 G-04) sağlanır. |
 
-**Teslimat:** "Nit raporu" (CSV'ler + 1 sayfalık özet). Bu rapor şu varsayılanları kesinleştirir:
+**S0 dosya ve modül listesi.**
+
+*XcodeGen `project.yml` (S0):*
+- Tek hedef: `Arifetanga` (uygulama, iOS 27.0, iPhone).
+- Uzantı yok. Xcode test hedefi yok: S0 testleri `swift test` ile Linux'ta koşar (`NitMath`, `DSCore`).
+
+```yaml
+name: Arifetanga
+options: { bundleIdPrefix: "<ters-dns>", deploymentTarget: { iOS: "27.0" } }
+settings: { base: { SWIFT_VERSION: "6.0", TARGETED_DEVICE_FAMILY: "1" } }
+packages:
+  NitMath: { path: Packages/NitMath }
+  NitCore: { path: Packages/NitCore }
+  VideoDecode: { path: Packages/VideoDecode }
+  Demux: { path: Packages/Demux }
+  ReferencePath: { path: Packages/ReferencePath }
+  AudioCore: { path: Packages/AudioCore }
+  PlaybackEngine: { path: Packages/PlaybackEngine }
+  Diagnostics: { path: Packages/Diagnostics }
+  DesignSystem: { path: Packages/DesignSystem }
+targets:
+  Arifetanga:
+    type: application
+    platform: iOS
+    sources: [App]
+    dependencies:
+      - package: PlaybackEngine
+      - package: Diagnostics
+      - package: DesignSystem
+        products: [DesignSystem, DSCore]
+    entitlements:
+      path: App/Arifetanga.entitlements
+      properties: { com.apple.developer.kernel.increased-memory-limit: true }
+    info:
+      path: App/Info.plist
+      properties:
+        UILaunchScreen: {}
+        UIApplicationSceneManifest: { UIApplicationSupportsMultipleScenes: false }
+        UIBackgroundModes: [audio]
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UIStatusBarHidden: true
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+    settings:
+      configs:
+        Release: { CODE_SIGN_STYLE: Manual, CODE_SIGN_IDENTITY: "Apple Distribution",
+                   DEVELOPMENT_TEAM: "$(TEAM_ID)", PROVISIONING_PROFILE_SPECIFIER: "$(PROFILE_NAME)" }
+```
+
+- Yönlerin yalnızca yatay olması S0'a özgüdür; Sprint 2'de dikey eklenir.
+- Shader kaynağı `NitCore` paket kaynağıdır ve S0'da çalışma anında `MTLCompileOptions(mathMode: .safe, mathFloatingPointFunctions: .precise)` ile derlenir (≈ 100–300 ms, açılışta bir kez). Bu sayede Parametreler paneli shader sabitlerini yeniden derleyebilir. Üretimde derlenmiş metallib + `precise::` çağrıları kullanılır.
+
+*SPM paketleri: S0'da gerçekten kodlanan alt küme:*
+
+| Paket | S0'da kodlanan | Sonraya kalan |
+|---|---|---|
+| `NitMath` (Linux testli) | PQ/HLG/BT.1886, YCbCr normalizasyonu, 709/2020/601 → P3 matrisleri, Nit eğrisi `f` ve parametre çözümü, headroom süzgecinin saf fonksiyonu, Tepe Kilidi durum makinesi (saf), `S(b)` tahmini ve Y formülü (§14 G-01) | DV reshaping CPU referansı (S2), sahne beyazı tahmincisi (S0b), Temiz Nit LUT'u (S1) |
+| `NitCore` | `NitRenderer` (Geçiş B + adım 6), `NitKernel.metal`, `HeadroomMonitor` (ana thread 30 Hz → Atomic), `HeadroomController`, `PeakLockController`, `FrameScheduler` (render thread + `CADisplayLink` + `present(at:)` + presented handler), `TestPatternRenderer` (Nit yarısı desenleri), `VideoOutput` (iki katman) | Geçiş A ve A/B (S1), histogram ve `L_ref` (S0b), DV uniform'ları (S2), altyazı bindirme (Sprint 2), Flashing Lights adımı (G-10) |
+| `VideoDecode` | `VTDecoder` (asenkron; `x420`/`420v`; Metal uyumlu IOSurface), `ReorderBuffer` | Yazılım çözücü adaptörleri |
+| `Demux` | `PacketSource` protokolü, `AssetReaderSource` (MP4/MOV; sıkıştırılmış video ve ses; IDR dizini; GOP tutucu) | libavformat, libbluray ve libudfread kaynakları |
+| `ReferencePath` | `ReferenceFeeder` (sıkıştırılmış örnekler; IDR'den `DoNotDisplay` ile ön-doldurma) | PiP, dış ekran |
+| `AudioCore` | `AudioOutput`: renderer (`Receiver`) + synchronizer, AAC sıkıştırılmış geçiş | İki evreli DSP, çözücüler, rota |
+| `PlaybackEngine` | `actor PlaybackEngine`; `EngineCommand`, `EngineEvent`, anlık görüntü tiplerinin tamamı (§14 G-04; S0'da yalnızca görüntü olayları yayımlanır); akışlar (headroom 10 Hz, clock 1 Hz, state); `ModeSwitcher`; `SystemMonitor` (ısı, Düşük Güç Modu, ekran kaydı) | Ses, ağ ve altyazı olayları |
+| `Diagnostics` | `TelemetryRecorder` (ikili halka), `TelemetryRow`, `CSVExporter`, `annotate(ui:)` | MetricKit ve `OSLogStore` dışa aktarımı (Sprint 2) |
+| `DesignSystem` | `DSCore`: token'lar, sayı biçimleri, `HUDCatalog` (HUD-01/03/04/05/06/07/08). `DesignSystem`: OLEDIsland, MicroShift, C-04/C-05 segment, C-07 HUDToast, C-12 headroom göstergesi, toggle satırı | Diğer bileşenler |
+
+S0'da oluşturulmayan paketler: `DSPKit`, `DoviKit`, `MediaIO`, `DialogKit`, `SubtitleKit`, `Sources`, `Library`.
+
+*Dosyalar:*
+
+```
+project.yml · .gitignore (Arifetanga.xcodeproj) · ExportOptions/adhoc.plist
+.github/workflows/ci.yml        ubuntu: swift test (NitMath, DSCore) + TestAssets üretimi → artifact
+.github/workflows/release.yml   macos-26: artifact indir → xcodegen → archive → export → IPA
+.github/workflows/deps.yml      (S0'ı engellemez; S1/S2 için)
+TestAssets/generate.sh          ffmpeg komutları (desenler, kısa örnekler, okunabilirlik deseni)
+App/ArifetangaApp.swift · App/Arifetanga.entitlements · App/Resources/{Assets.xcassets, Localizable.xcstrings, TestClips/}
+App/Root/LabRootView.swift                                   (E-60)
+App/Features/Lab/{NitLabScreen, NitLabHUD, NitLabStrip, FilePanel, EqualityTestView,
+                  ToneTestView, ParameterPanel, AudioLabScreen (yer tutucu), DesignCatalogView}.swift
+App/Features/Player/Surface/{VideoSurface, VideoSurfaceView}.swift
+Packages/NitMath/{Package.swift, Sources/NitMath/{TransferFunctions, ColorMatrices, YCbCr, NitCurve,
+                  HeadroomFilter, PeakLockMachine, DisplayEstimate}.swift, Tests/NitMathTests/*}
+Packages/NitCore/{Package.swift, Sources/NitCore/{NitRenderer, HeadroomMonitor, HeadroomController,
+                  PeakLockController, FrameScheduler, TestPatternRenderer, VideoOutput}.swift,
+                  Sources/NitCore/Shaders/{NitKernel.metal, NitUniforms.h}}
+Packages/VideoDecode/Sources/VideoDecode/{VTDecoder, ReorderBuffer}.swift
+Packages/Demux/Sources/Demux/{PacketSource, AssetReaderSource, GOPHolder}.swift
+Packages/ReferencePath/Sources/ReferencePath/ReferenceFeeder.swift
+Packages/AudioCore/Sources/AudioCore/AudioOutput.swift
+Packages/PlaybackEngine/Sources/PlaybackEngine/{PlaybackEngine, EngineTypes, EngineEvent, EngineCommand,
+                  Snapshots, ModeSwitcher, SystemMonitor}.swift
+Packages/Diagnostics/Sources/Diagnostics/{TelemetryRecorder, TelemetryRow, CSVExporter}.swift
+Packages/DesignSystem/{Package.swift, Sources/DSCore/*, Sources/DesignSystem/{Tokens, Materials, Components}/*,
+                  Tests/DSCoreTests/*}
+```
+
+**Teslimat:** "Nit raporu" (CSV'ler + 1 sayfalık özet + K-T1 fotoğrafları). Bu rapor şu varsayılanları kesinleştirir:
 - `τ_up`, `w`, `κ` ve γ
 - Titreşim
 - Ölçekleyici kalitesi
 - Tepe Kilidi adımları
 - `contentsHeadroom` kullanımı
+- `S(b)` tablosu
+- Arayüz katmanı kuralları (K-T2)
 
 ### 10.2 Spike sırası
 
@@ -1417,7 +1716,7 @@ graph TD
 
 | Sıra | Spike | Kapsadığı sorular | Başarı ölçütü (özet) | Süre | Zaman |
 |---|---|---|---|---|---|
-| **S0** | **Nit Çekirdeği prototipi** | AS-26, AS-29, AS-33, AS-28 (erken), AS-5 (bir kısmı) | §10.1 | 6–8 g | **Hafta 1** |
+| **S0** | **Nit Çekirdeği prototipi (Nit Laboratuvarı)** | AS-26, AS-29, AS-33, AS-28 (erken), AS-5 (bir kısmı), K-T1–K-T4 | §10.1 | 7–9 g | **Hafta 1** (2. haftaya taşabilir) |
 | **S0b** | **Sahne bazlı `L_ref` (HDR10/HLG)** | **AS-38** | Tahmin ile gerçek değer arasında medyan hata ≤ 0,3 stop. Diffuse beyazı 100–150 nit olan 5 HDR10 filmde Maksimum modunda tipik beyaz ≥ 0,9 `H`. Parlak obje kliplerinde pompalama yok (≥ 9/10). Kesimlerin ≥ %95'i yakalanır. Toplam M2 ≤ 4,5 ms (§3.14). | 3–4 g | **Hafta 2 (ilk iş)** |
 | **S1** | **Temiz Nit** | **AS-32** | CAMBI (çıkış PQ 10-bit'e kodlanmış) ≥ %50 düşer. Doku bölgelerinde yüksek frekans enerjisi kaybı ≤ %2. 1080p'de ≤ 1,5 ms. 2 saatte 0 kare kaybı. Kör A/B'de ≥ 8/10 tercih. | 4–5 g | Hafta 2–3 |
 | S2 | DV: Referans tetikleme, P7→P8.1, P5 renk; **AS-38'in DV kısmı** (L1/L2/L8, `k`) | AS-1, AS-2, AS-30, AS-38 (DV) | MKV'den P8.1 ve dönüştürülmüş P7 Referans'ta DV tetikler (MP4/AVPlayer ile yan yana aynı). RPU dönüşümü < 2 ms/kare. ΔE_ITP ortalaması < 1 (çevrimdışı), cihazda yeşil/mor yok. | 4–5 g | Hafta 2–3 |
@@ -1427,6 +1726,7 @@ graph TD
 | S6 | USB DAC bit-perfect | AS-11 | DAC ekranında doğru hız görünür. Loopback'te bit eşitliği. | 2 g | Hafta 3 (donanım gerekli) |
 | S7 | SMB ve ağ | AS-3, AS-23 | ≥ 20 MB/s. 2 saatte 0 takılma. Sarma < 1,5 s. | 2 g | Hafta 3 |
 | S8 | Platform | AS-21, AS-22, AS-24, AS-31 | Gerçek bellek limiti ölçülür. Now Playing ve kesinti senaryoları geçer. Deps derlemesi önbellekle < 15 dk. PiP ve dış ekran senaryoları geçer. | 3 g | Hafta 3 |
+| S10 | **Oynatma hızı ve altyazı gecikmesi (rev. 6)** | **AS-39** | §10.3b | 2–3 g | Hafta 3 (S3'ten sonra) |
 | S9 | ISO/BDMV ve AV1 | AS-8, AS-7 | 20 diskin ≥ 19'unda ana başlık doğru. AV1 1080p ≥ 30 fps. | 3 g | Hafta 4 |
 
 ### 10.3 AS-37: Boost ve limiter (M10)
@@ -1440,6 +1740,16 @@ graph TD
 | (e) Bütçe | CPU < %1 (8 kanal). Ek gecikme < 3 ms (2 ms ön bakış). |
 | (f) Rotalar | Hoparlör (HPF dinleme), AirPods, BT (−1,5 dBTP), DAC ("bit-perfect değil" göstergesi), native Atmos (otomatik PCM ve rozet) |
 | (g) Belgelenmemiş davranış | `Receiver`/renderer `volume > 1,0` davranışı ve Laboratuvar'daki "ham float" kipinde rota başına sistem davranışı raporlanır (yalnızca bilgi; tasarım bunlara dayanmaz). |
+
+### 10.3b AS-39: Oynatma hızı ve elle altyazı gecikmesi (rev. 6)
+
+| Senaryo | Ölçüt |
+|---|---|
+| (a) 0,5 / 0,75 / 1,25 / 1,5 / 2× hızlarda film (stereo AAC, 7.1 PCM) | A/V senkron hatası ≤ 20 ms (ekranda flaş + klik içeren klip, ikinci telefonla 240 fps kayıt). Perde korunur: 1 kHz ton ±%0,5 içinde; konuşma kör dinlemede "doğal". Hız değişiminde tıklama ya da boşluk olmaz. `timeDomain` CPU'su 2×'te stereoda ≤ %5, 7.1'de ≤ %10 P çekirdeği. |
+| (b) Native Atmos 1× dışında | Renderer'ın davranışı raporlanır (Atmos göstergesi yanıyor mu, perde korunuyor mu?). Buna göre "PCM'e çözme" kalır ya da kaldırılır. PCM yolu ve 1×'e dönüşte native'e geri geçiş çalışır. |
+| (c) Altyazı | 2×'te ASS (animasyonlu) ve PGS zamanlaması ±1 kare içinde. Gecikme ±10 s her iki yönde doğru uygulanır. SMB'de −10 s ofsette takılma olmaz. Dosya ve parça bazında kalıcılık çalışır. |
+| (d) Video | 24p 4K HEVC 10-bit 2×'te beklenmeyen düşen kare 0; kalıplar §4.10'daki tabloya uyar. 4K60 2×'te referans olmayan kare atlamayla çözücü yetişir. Yazılım çözücüde (1080p AV1, 2×) atlanan kare sayısı raporlanır. |
+| (e) Etkileşim | M9 2×'te bütçe içinde kalır ya da tıklamasız F1'e geçer. Limiter tavanı: dijital loopback mümkünse (DAC dijital çıkışı) 1× dışında da 0 aşım > −1,0 dBTP; değilse dinleme testi. GPU 2×'te ≤ %25. |
 
 ### 10.4 v1.1 spike'ları (N2 Ses Çekirdeği)
 
@@ -1495,6 +1805,14 @@ AS-34, MVP sırasında paralel sonuçlanırsa yalnızca kontur katmanı MVP sonu
 | K-26 | Boost hatırlama | Genel; içerik bazında; rota bazında | **Rota sınıfı başına + isteğe bağlı içerik geçersiz kılma.** Hoparlördeki yüksek boost kulaklığa taşınmaz (güvenlik). |
 | K-27 | HDR referans beyazı (`L_ref`) (rev. 5) | (a) Sabit 203 nit; (b) L1 ortalaması / Reinhard anahtarı; (c) histogram tepesi / P99; (d) histogram ortalaması; (e) DV'de L1 (+ L2/L8 düzeltmesi), HDR10'da P90 histogramı, film çapası ±0,5 stop, 80–300 nit, asimetrik süzgeç | **(e).** (a) diffuse beyazı 100–150 nit olan filmlerde beyazı 640–980 nitte bırakıyor. (b) ve (d) kompozisyona bağlı: gece sahnelerini aydınlatıp niyeti bozuyor. (c) diffuse beyazı değil vurguyu ölçüyor. (e)'de DV L1 çekim boyunca sabit olduğundan pompalama yapamaz. P90 vurgulara karşı dayanıklı; çapa ve sınırlar sanatsal niyeti ve pompalamayı koruyor. Kaynaktan hesaplandığı için `H` ile geri besleme kurulmaz. Tam dinamik ton eşleme (κ, `w`) v1.1'de. |
 | K-28 | AS-38'in spike içindeki yeri | S0'ın içinde; S0'dan hemen sonra ayrı spike; S1'den sonra | **S0'dan hemen sonra ayrı spike (S0b); DV kısmı S2'de.** S0'ın git/gitme kararını geciktirmez. HDR10'da 1 numaralı vaadi doğrudan belirlediği için Temiz Nit'ten önce gelir. |
+| K-29 | Oynatma hızı (rev. 6) | (a) Kendi zaman-perde kodumuz (SoundTouch LGPL, Rubber Band GPL); (b) `varispeed`; (c) synchronizer hızı + renderer'ın `timeDomain` algoritması | **(c).** Native, ek kod yok, A/V senkronunu synchronizer sağlar. DSP zinciri medya zamanında kalır ve değişmez. (b) perdeyi değiştirir; uzman seçeneği olarak kalır. Native Atmos 1× dışında AS-39 sonuçlanana kadar PCM'e çözülür. |
+| K-30 | Altyazı gecikmesinin zaman tabanı (rev. 6) | Gerçek zaman; medya zamanı | **Medya zamanı.** Kayma dosyanın zaman çizelgesindedir; hız değişince hizalama korunur. Adım 50 ms, aralık ±10 s, kalıcılık dosya + parça bazında. |
+| K-31 | S0'ın bağımlılıkları | FFmpeg ile MKV'den başlamak; AVFoundation ile MP4/MOV | **AVFoundation (`AVAssetReader` + VT), native bağımlılık yok.** İlk CI derlemesi hızlı ve basit olur. `PacketSource` protokolü sayesinde kod atılmaz. |
+| K-32 | `Diagnostics` sınırı ve tasarım sistemi | Arayüzlü `Diagnostics`; arayüzsüz `Diagnostics` + `DesignSystem` paketi | **Arayüzsüz `Diagnostics`; Laboratuvar `App/Features/Lab`'da; HUD bileşenleri `DesignSystem`'de** (tasarım §9.7, G-19). |
+| K-33 | Drawable boyutu | Video dikdörtgeni; tam ekran | **Tam ekran.** Banda altyazı, Doldur kipi, A/B ve dikeyde kayma drawable değişmeden çalışır. Döndürmede `presentsWithTransaction` ile siyah karesiz yeniden ayırma yapılır (G-18). |
+| K-34 | "Yanıp Sönen Işıkları Azalt" (Nit) | Uygulamamak (yalnızca kart); `MAFlashingLightsProcessor` | **`MAFlashingLightsProcessor`** (iOS 17 **[doğrulandı]**), `canProcessSurface` true dönerse. Dönmezse tasarımın kartı gösterilir. Bu, kullanıcının erişilebilirlik ayarıdır; P-1 ihlali değildir (G-10). |
+| K-35 | Sunucu kimlik doğrulama | Plex: yalnızca plex.tv/link kodu ya da web + PIN. Jellyfin: yalnızca parola ya da parola + Quick Connect | **Plex: web + PIN yoklaması; yedeği plex.tv/link kodu. Jellyfin: parola + Quick Connect** (G-15) |
+| K-36 | VobSub | Desteklememek; desteklemek | **Desteklemek** (FFmpeg `dvdsub`, PGS yolu, maliyeti düşük; G-07) |
 
 ---
 
@@ -1514,6 +1832,8 @@ AS-34, MVP sırasında paralel sonuçlanırsa yalnızca kontur katmanı MVP sonu
 | R10 | Boost'un kulaklık güvenliğiyle beklenenden az etkili olması | Orta | Düşük | Şeffaf bilgi çipi; sistem sınırı aşılmaz | AS-37 |
 | R11 | iOS 27 API davranışlarının belgeyle uyuşmaması (`Receiver`, Now Playing) | Düşük–orta | Orta | Eski API yedekleri (iOS 17 `sampleBufferRenderer`) | S0, S8 |
 | R12 | Sahne beyazı tahmin hatası. Gökyüzü ya da kar ağırlıklı sahnelerde beyaz düşük kalabilir; kasıtlı karanlık sahneler fazla aydınlanabilir; sahne içinde pompalama görülebilir. | Orta | Orta–yüksek (HDR'da 1 numaralı vaat ve sanatsal niyet) | Film çapası ±0,5 stop; 80–300 nit sınırı; sahne içinde +0,2 stop yükselme tavanı ve 8 s zaman sabiti; DV'de çekim başına sabit L1; başlık bazında çapa önbelleği; uzmanda Sabit kipi | S0b / AS-38 |
+| R13 | 1× dışı hızda ses kalitesi ya da Atmos davranışı belirsiz (zaman-perde artefaktları, limiter tavanı, Atmos'un PCM'e düşmesi) | Orta | Düşük–orta | `timeDomain`; gerekirse tavan −1,5 dBTP; 1× dışında PCM'e çözme; uzmanda `varispeed` | S10 / AS-39 |
+| R14 | `MAFlashingLightsProcessor` EDR (RGBA16F, extended linear P3) yüzeyini işleyemez | Orta | Orta (erişilebilirlik) | Kart: kullanıcıya Referans önerilir; AVFoundation yolu ayarı kendisi uygular **[doğrulanmalı]** | AS-31 |
 
 ---
 
@@ -1543,6 +1863,473 @@ AS-34, MVP sırasında paralel sonuçlanırsa yalnızca kontur katmanı MVP sonu
 - [PiP + AVSampleBufferDisplayLayer ilk başlatma hatası (thread 792342)](https://developer.apple.com/forums/thread/792342) · [100ms SDK: Metal, PiP ile desteklenmiyor](https://100ms.live/docs/ios/v2/features/pip-mode)
 - [GitHub Actions runner görüntüleri: Xcode 27 kanalı](https://newreleases.io/project/github/actions/runner-images/release/xcode-27%2F20260728.0060) · [GitHub Actions faturalandırma](https://docs.github.com/en/billing/concepts/product-billing/github-actions) · [FFmpeg 8.1 "Hoare" (Phoronix)](https://www.phoronix.com/news/FFmpeg-8.1-Released)
 
+**Apple: uyum turu (rev. 6) kaynakları**
+- [AVSampleBufferRenderSynchronizer.setRate(_:time:)](https://developer.apple.com/documentation/avfoundation/avsamplebufferrendersynchronizer/setrate(_:time:)) · [AVAudioTimePitchAlgorithm (timeDomain, spectral, varispeed)](https://developer.apple.com/documentation/avfoundation/avaudiotimepitchalgorithm)
+- Now Playing: [Playback commands](https://developer.apple.com/documentation/nowplaying/playback-commands) · [skipForward(preferredIntervals:_:)](https://developer.apple.com/documentation/nowplaying/mediacommand/skipforward(preferredintervals:_:)) · [changePlaybackRate(supported:_:)](https://developer.apple.com/documentation/nowplaying/mediacommand/changeplaybackrate(supported:_:))
+- MediaAccessibility: [MAFlashingLightsProcessor (iOS 17)](https://developer.apple.com/documentation/mediaaccessibility/maflashinglightsprocessor) · [canProcessSurface(_:)](https://developer.apple.com/documentation/mediaaccessibility/maflashinglightsprocessor/canprocesssurface(_:)) · [MACaptionAppearanceCopyPreferredCaptioningMediaCharacteristics](https://developer.apple.com/documentation/mediaaccessibility/macaptionappearancecopypreferredcaptioningmediacharacteristics(_:)) · [MAAudibleMediaCopyPreferredCharacteristics](https://developer.apple.com/documentation/mediaaccessibility/maaudiblemediacopypreferredcharacteristics())
+- [libass `ass.h`: `ass_set_margins` ve `ass_set_use_margins`](https://github.com/libass/libass/blob/master/libass/ass.h)
+
 **Açık kaynak**
 - [dovi_tool / libdovi (MIT; C API `capi.rs`; dönüşüm modları)](https://github.com/quietvoid/dovi_tool) · [libplacebo (LGPL-2.1+; `src/shaders/colorspace.c` DV reshaping referansı)](https://code.videolan.org/videolan/libplacebo) · [DeepFilterNet (MIT/Apache-2.0, 48 kHz)](https://github.com/Rikorose/DeepFilterNet)
 - Standartlar: ETSI GS CCM 001 (DV bileşik içerik/reshaping) · ITU-R BT.2100 (PQ/HLG) · BT.2408 (203 nit referans beyaz) · BT.2390 (EETF) · BT.1886 · BT.2124 (ΔE_ITP) · BS.1770-4 (loudness ve true-peak) · BS.775 (downmix)
+
+---
+
+## 14. Tasarım geri bildirimine yanıtlar (G-01–G-20, uyum turu)
+
+Bu bölüm `03-tasarim.md` §11'deki her maddeyi yanıtlar. Her maddede karar, ilgili bölüm ve gerektiğinde API taslağı yer alır. Tasarımda **[ajan 2]** olarak işaretlenen noktalar burada kapanır.
+
+### G-01: Sahne bazlı `L_ref` (§3.5.1)
+
+**Karar.** §3.5.1 geçerlidir: kaynak, sahne kesimi, süzgeç ve sınırlar orada tanımlı. Tasarımın istediği eksikler şunlar.
+
+**Uzman kipleri.** Tasarımla hizalanır (C-13):
+- **Sahne bazlı** (varsayılan)
+- **Sabit 203 nit**
+- **Elle** (100–300 nit)
+
+Komut: `setSceneWhiteMode(.sceneBased | .fixed203 | .manual(nits:))`.
+
+**Güncelleme sıklığı:**
+- Motor `L_ref`'i her kaynak karesinde, süzgeçten geçirerek hesaplar.
+- Arayüze `sceneWhiteChanged` olayı yalnızca şu durumlarda gider, en fazla 1 Hz:
+  1. Sahne kesiminden sonra değer oturunca (3 karenin medyanı + 0,25 s)
+  2. Sahne içinde değer ≥ 0,1 stop değişince
+  3. Headroom durumu (`HeadroomStatus`) değişip Y yeniden hesaplanınca
+- Arayüz 300 ms'lik çapraz geçişle gösterir (tasarım C-13).
+
+**"→ ≈ Y nit" tahmini.** Y'yi motor hesaplar ve `SceneWhite.displayEstimateNits` alanında verir. Arayüz hesaplamaz.
+
+```
+P_ref = 1200 nit        panelin HDR tepe spec değeri (Laboratuvar'dan ayarlanabilir; ışıkölçer varsa kalibre)
+v_w   = beyazın EDR değeri:  w · H_eff (HDR) · H_eff (SDR) · Referans'ta tanımsız
+S(b)  = b parlaklığında SDR beyazının nit değeri. ÖĞRENİLİR:
+        durum panelPeak ve thermalState ≤ .fair iken  S(b) = P_ref / H_cur
+        (b, S) çiftleri 0,02'lik b adımlarıyla cihaz başına saklanır (UserDefaults);
+        b = 1,0 değeri S_max'tır (SDR tepesi)
+Y     = v_w · S(b)      → 10 nite yuvarlanır, her zaman "≈" ile yazılır
+```
+
+| `HeadroomStatus` | Y | Örnek metin |
+|---|---|---|
+| `panelPeak` | `w · P_ref · H_eff / H_cur` ≈ `w · P_ref` | "Sahne beyazı 140 nit → ≈ 1140 nit" |
+| `thermal` | `v_w · S(b)` (b için öğrenilmiş S varsa) | "→ ≈ 900 nit" |
+| `systemCollapsed`, `lowPower` | `v_w · S(b)`; Tepe Kilidi b'yi 1,0'a çıkardıysa `S_max` | "→ ≈ 600 nit (SDR tepesi)" |
+| `sliderLimited`, `peakLockRaising` | **Gösterilmez.** Dirseğin altında `S(b)` öğrenilemez. | "→ tepeye ulaşmıyor" |
+| `reference` | Satır gizli | — |
+| `S(b)` henüz öğrenilmediyse | Gösterilmez; X yine gösterilir | "Sahne beyazı 140 nit" |
+
+**Bilgi paneli için olay akışı:**
+
+```
+render thread (her kare)  : L_ref, W_f, A, e, kaynak  → atomik durum + telemetri satırı
+motor (olay üreticisi)    : kesim sonrası oturma ∨ ≥ 0,1 stop ∨ HeadroomStatus değişimi (≤ 1 Hz)
+                            → EngineEvent.sceneWhiteChanged(SceneWhite)
+@MainActor PlayerViewModel: display.sceneWhite = sw   → Görüntü paneli C-13, Bilgi "Sahne" satırı,
+                                                         sabitlenmiş katman, zincir satırı (C-15)
+EngineState (≤ 10 Hz)     : display.sceneWhite        → ilk açılış ve panel yeniden açılışı için son değer
+```
+
+### G-02: Okunabilirlik varsayımı
+
+**Karar.** S0'a **K-T1** olarak eklendi (§10.1).
+- Teknik not: `CAMetalLayer` ve arayüz adacıkları opaktır (tasarım R-1). Bu durumda karışım yalnızca kenar yumuşatmasında olur. Kompozitörün doğrusal ışıkta ya da gamma uzayında karıştırması, opak kural altında okunabilirliği etkilemez.
+- K-T1 yalnızca teyit içindir. Varsayım çürürse kurallar değişmez.
+
+### G-03: Arayüz katmanlarının maliyeti
+
+**Karar.** S0'a **K-T2** olarak eklendi (§10.1).
+- Telemetriye `chromeVisible` ve `panel` alanları eklendi (§9.4).
+- **Ek pil testi:** 2 × 30 dk.
+  - Sabitlenmiş istatistik katmanı açıkken pil farkı > %2/saat çıkarsa katman 1 Hz'e iner ve varsayılan olarak kapalı kalır.
+- Sistemin tek opak tam ekran katman için daha ucuz bir ekran yolu kullanıp kullanmadığı public API ile görülemez **[doğrulanmalı]**; yalnızca dolaylı olarak ölçülür.
+
+### G-04: Motor → arayüz olay sözleşmesi
+
+**Karar:**
+- `PlaybackEngine` aşağıdaki tipleri yayımlar.
+- Bu tipler **tek tanımdır**: tasarım §9.5'teki eşadlı tipler (`DisplayMode`, `HDRCurve`, `HeadroomStatus`, `DialogLevel`, `LimiterMode`, `RouteInfo`, `AudioNotice`) bunlarla değiştirilir.
+- Kitaplıkla ilgili bilgiler (`EpisodeRef`, poster vb.) arayüz tarafında kalır.
+- Dosya: `Packages/PlaybackEngine/Sources/PlaybackEngine/{EngineTypes, EngineEvent, EngineCommand, Snapshots, PlaybackEngine}.swift`.
+
+```swift
+import Foundation
+import QuartzCore
+import AVFoundation
+
+// MARK: - Ortak sözlük (EngineTypes.swift)
+
+public enum DisplayMode: Sendable, Hashable { case nit, reference }
+public enum HDRCurve: Sendable, Hashable { case maximum, balanced }
+
+public enum HeadroomStatus: Sendable, Hashable {
+    case panelPeak, sliderLimited, peakLockRaising, thermal, lowPower, systemCollapsed, reference
+}
+
+public enum ThermalLevel: Int, Sendable, Hashable, Comparable {
+    case nominal, fair, serious, critical
+    public static func < (a: Self, b: Self) -> Bool { a.rawValue < b.rawValue }
+}
+
+public enum AutoReferenceReason: Sendable, Hashable {
+    case pictureInPicture, externalDisplay, dolbyVisionRPUError, unsupportedColorSystem
+}
+
+public enum SceneWhiteMode: Sendable, Hashable {
+    case sceneBased                       // varsayılan
+    case fixed203
+    case manual(nits: Double)             // 100…300; motor sınırlar
+}
+
+public enum SceneWhiteSource: Sendable, Hashable {
+    case dolbyVisionL1(trimCorrected: Bool), histogramP90, fixed, manual, sdr
+}
+
+public struct SceneWhite: Sendable, Hashable {
+    public var sourceNits: Double?          // X (L_ref); SDR'da nil
+    public var displayEstimateNits: Double? // Y (≈); tahmin edilemiyorsa nil (G-01 tablosu)
+    public var fractionOfHeadroom: Double   // w (HDR) ya da 1 (SDR)
+    public var anchorNits: Double?          // A (film çapası)
+    public var source: SceneWhiteSource
+    public var mode: SceneWhiteMode
+}
+
+public enum DialogLevel: Int, Sendable, Hashable { case off, one, two, three }
+public enum DialogEngine: Sendable, Hashable { case soundIsolation, deepFilter, dspCenter }
+public enum LimiterMode: Sendable, Hashable { case smart, limiterOnly, off }
+public enum RouteClass: Sendable, Hashable { case speaker, headphonesBT, airPlay, usbDAC }
+
+public struct RouteInfo: Sendable, Hashable {
+    public var routeClass: RouteClass
+    public var name: String
+    public var sampleRate: Double
+    public var isSpatial: Bool
+}
+
+public enum AtmosPCMReason: Sendable, Hashable { case boost, dialog, playbackRate }
+
+public enum AudioNotice: Sendable, Hashable {        // tasarım N-1…N-7
+    case atmosDecodedForBoost                        // N-1
+    case atmosPreservedBoostLocked                   // N-2
+    case notBitPerfect(boostDB: Double)              // N-3
+    case headphoneSafetyMayLimit                     // N-4
+    case speakerLowCut                               // N-5
+    case airPlayDelayed                              // N-6
+    case atmosDecodedForDialog                       // N-7
+}
+
+public enum PlaybackFailure: Sendable, Hashable {    // tasarım H-03…H-06
+    case av1Above1080p
+    case unsupportedFormat(codec: String, profile: String?)
+    case fileNotFound
+    case sourceUnreachable(host: String)
+    case decoderFailed(status: Int32)
+}
+
+public enum OpeningStep: Sendable, Hashable { case reading, findingMainTitle, preparingDecoder }
+
+public enum PlaybackPhase: Sendable, Hashable {
+    case opening(OpeningStep)
+    case playing, paused
+    case buffering(requiredBytesPerSecond: Int?, receivedBytesPerSecond: Int?)
+    case seeking(to: Duration)
+    case ended                                       // sonraki bölümü arayüz (Library) bulur
+    case failed(PlaybackFailure)
+}
+
+public enum SDRGamma: Sendable, Hashable { case automatic, g22, g24 }
+public enum CleanNitMode: Sendable, Hashable { case automatic, strong, off }
+public enum DitherLevel: Sendable, Hashable { case off, fine, medium }   // ince = 1 LSB, orta = 2 LSB
+
+public struct DisplayExpert: Sendable, Hashable {
+    public var maximumWhite: Double = 0.95           // w, 0,90…0,98
+    public var sdrGamma: SDRGamma = .automatic
+    public var cleanNit: CleanNitMode = .automatic
+    public var dither: DitherLevel = .fine
+    public var exactCadence = false                  // yalnızca 23,976 ve 1×
+    public var sceneDeviationStops = 0.5             // δ, 0…1
+    public init() {}
+}
+
+// MARK: - Olaylar (EngineEvent.swift) — kayıpsız; HUD ve paneller bunlarla beslenir
+
+public enum DisplayModeTransition: Sendable, Hashable {
+    case started(to: DisplayMode)
+    case finished(to: DisplayMode, duration: Duration)
+}
+
+public enum EngineEvent: Sendable, Hashable {
+    // Görüntü ve headroom
+    case headroomCollapsed                                   // HUD-01
+    case headroomRestored                                    // HUD-02
+    case lowPowerModeChanged(isOn: Bool)                     // HUD-03 / HUD-04
+    case thermalThrottling(ThermalLevel)                     // HUD-05 (≥ .serious ve H düştü)
+    case peakLockFirstRaise(from: Double, to: Double)        // HUD-06
+    case sliderLimited(peakLockEnabled: Bool)                // HUD-07
+    case screenCaptureChanged(isActive: Bool)                // HUD-08
+    case autoReference(AutoReferenceReason)                  // HUD-09 (PiP için HUD yok, yer tutucu)
+    case nitRestored(after: AutoReferenceReason)             // HUD-17 (PiP'ten dönüş)
+    case displayModeTransition(DisplayModeTransition)        // segment altı ilerleme çizgisi
+    case sceneWhiteChanged(SceneWhite)                       // C-13, Bilgi (G-01)
+    // Ses
+    case atmosDecodedToPCM(reason: AtmosPCMReason, channels: Int) // HUD-10 / HUD-11
+    case atmosRestored                                       // HUD-12
+    case audioRouteChanged(RouteInfo)                        // HUD-16 (AirPlay), zincir satırı
+    case audioNoticesChanged([AudioNotice])                  // N-1…N-7 (her zaman tam liste)
+    case dialogEngineChanged(DialogEngine)                   // Bilgi: "AUSoundIsolation → F1"
+    // Ağ, oturum, sistem
+    case networkSlow(requiredBytesPerSecond: Int, receivedBytesPerSecond: Int) // HUD-13
+    case networkRecovered
+    case resumed(at: Duration)                               // HUD-14
+    case pictureInPictureChanged(isActive: Bool)
+    case externalDisplayChanged(isConnected: Bool)
+    case playbackRateChanged(Double)                         // rev. 6
+    case subtitleDelayChanged(Duration)                      // rev. 6
+    case phaseChanged(PlaybackPhase)
+}
+
+// MARK: - Anlık görüntüler (Snapshots.swift) — en yenisi kazanır
+
+public struct HeadroomSnapshot: Sendable, Hashable {        // 10 Hz; yalnızca abone varken
+    public var current, potential, smoothed, effective: Double
+    public var outputMax: Double
+    public var brightness, brightnessAtEntry: Double
+    public var status: HeadroomStatus
+}
+
+public struct MeterSnapshot: Sendable, Hashable {           // 30 Hz; oynatma noktasına hizalı (§5.5)
+    public var mediaTime: Duration
+    public var gainReductionDB, grPeakHoldDB, effectiveBoostDB: Double
+    public var clipLit: Bool
+    public var clipTotal: UInt64
+    public var clipLastSecond: Int
+    public var maxOvershootDBFS: Double?
+    public var truePeakOvers: UInt64
+}
+
+public struct ClockSnapshot: Sendable, Hashable {           // 1 Hz; .scrubbing'de 60 Hz
+    public var position: Duration
+    public var duration: Duration?
+    public var rate: Double
+    public var bufferedAhead: Duration
+}
+
+public struct DisplaySnapshot: Sendable, Hashable {
+    public var mode: DisplayMode
+    public var nitUnavailableReason: AutoReferenceReason?    // nil = Nit kullanılabilir
+    public var curve: HDRCurve?                              // SDR'da nil
+    public var peakLock: Bool
+    public var sceneWhite: SceneWhite?
+    public var sceneWhiteMode: SceneWhiteMode
+    public var cleanNitActive: Bool
+    public var expert: DisplayExpert
+    public var abSplit: Double?                              // nil = kapalı (G-17)
+    public var bandMap: Bool
+}
+
+public struct AudioSnapshot: Sendable, Hashable {
+    public var route: RouteInfo
+    public var selectedTrackID: Int?
+    public var dialog: DialogLevel
+    public var dialogEngine: DialogEngine?
+    public var nightMode: Bool
+    public var boostPercent: Double                          // 100…150
+    public var limiter: LimiterMode
+    public var atmosNative: Bool
+    public var notices: [AudioNotice]
+}
+
+public struct SubtitleSnapshot: Sendable, Hashable {
+    public var selectedTrackID: Int?
+    public var delay: Duration                               // medya zamanında (§4.11)
+    public var brightnessT: Double                           // s_sub = H_eff^t (G-05)
+    public var moveToBand: Bool
+    public var pgsScale: Double                              // 0,8…1,5 (G-08)
+}
+
+public struct EngineState: Sendable, Hashable {             // değişince; en fazla 10 Hz, birleştirilmiş
+    public var phase: PlaybackPhase
+    public var rate: Double
+    public var display: DisplaySnapshot
+    public var audio: AudioSnapshot
+    public var subtitles: SubtitleSnapshot
+}
+
+// MARK: - Komutlar (EngineCommand.swift)
+
+public enum MediaLocator: Sendable, Hashable {
+    case file(bookmark: Data)
+    case smb(sourceID: UUID, path: String)
+    case http(URL, headers: [String: String])
+}
+
+public enum ClockRate: Sendable, Hashable { case normal, scrubbing }
+
+public enum EngineCommand: Sendable, Hashable {
+    case open(MediaLocator, startAt: Duration?), close
+    case play, pause, togglePlay
+    case seek(to: Duration), seekBy(Duration)
+    case setRate(Double)                                     // 0,5…2,0 (§4.10)
+    case setDisplayMode(DisplayMode), setCurve(HDRCurve), setPeakLock(Bool)
+    case setSceneWhiteMode(SceneWhiteMode), setDisplayExpert(DisplayExpert)
+    case setABSplit(Double?), setBandMap(Bool)
+    case setDialog(DialogLevel), setNightMode(Bool)
+    case setBoost(percent: Double), setRememberBoostForContent(Bool), setLimiter(LimiterMode)
+    case selectAudio(trackID: Int), selectSubtitle(trackID: Int?)
+    case setSubtitleDelay(Duration), setSubtitleBrightness(t: Double)
+    case setMoveToBand(Bool), setPGSScale(Double)
+    case resetClipCounters
+    case startPictureInPicture
+    case setClockRate(ClockRate)
+}
+
+// MARK: - Motorun kamuya açık yüzü (PlaybackEngine.swift)
+
+@MainActor public final class VideoOutput {                // VideoSurfaceView yalnızca barındırır
+    public let nitLayer: CAMetalLayer                        // EDR, tam ekran drawable (K-33)
+    public let referenceLayer: AVSampleBufferDisplayLayer
+    public let referenceSubtitleLayer: CAMetalLayer          // SDR (G-05)
+    init(nitLayer: CAMetalLayer, referenceLayer: AVSampleBufferDisplayLayer,
+         referenceSubtitleLayer: CAMetalLayer) {
+        self.nitLayer = nitLayer
+        self.referenceLayer = referenceLayer
+        self.referenceSubtitleLayer = referenceSubtitleLayer
+    }
+}
+
+public actor PlaybackEngine {
+    public init() { /* … */ }
+    public func send(_ command: EngineCommand) { /* … */ }
+
+    // Her çağrı yeni bir abone akışı döndürür (çoklu yayın).
+    // Abone yoksa o akışın üreticisi çalışmaz ("yalnızca görünürken").
+    public nonisolated func events() -> AsyncStream<EngineEvent> { /* .bufferingOldest(64): kayıpsız */ fatalError() }
+    public nonisolated func state() -> AsyncStream<EngineState> { /* .bufferingNewest(1) */ fatalError() }
+    public nonisolated func headroom() -> AsyncStream<HeadroomSnapshot> { /* 10 Hz, .bufferingNewest(1) */ fatalError() }
+    public nonisolated func meters() -> AsyncStream<MeterSnapshot> { /* 30 Hz, .bufferingNewest(1) */ fatalError() }
+    public nonisolated func clock() -> AsyncStream<ClockSnapshot> { /* 1 Hz / 60 Hz, .bufferingNewest(1) */ fatalError() }
+    @MainActor public var videoOutput: VideoOutput { /* … */ fatalError() }
+}
+```
+
+**Akış kuralları:**
+
+| Akış | Hız | Tampon politikası | Üreticisi |
+|---|---|---|---|
+| `events()` | Olay oldukça | `.bufferingOldest(64)`: olay kaybolmaz | Motorun kontrol düzlemi |
+| `state()` | Değişince, en fazla 10 Hz | `.bufferingNewest(1)` | Motor (birleştirerek) |
+| `headroom()` | 10 Hz | `.bufferingNewest(1)` | Render thread'inin atomik durumundan, ayrı bir `.utility` görevi okur |
+| `meters()` | 30 Hz | `.bufferingNewest(1)` | §5.5'teki kilitsiz halka; PTS ≤ oynatma noktası |
+| `clock()` | 1 Hz; `setClockRate(.scrubbing)` ile 60 Hz | `.bufferingNewest(1)` | Synchronizer zamanı |
+
+- Render thread'inden ana thread'e kare başına geçiş yapılmaz (tasarım §8.4).
+- **HUD'un sahibi arayüzdür.** Motor yalnızca olayı bildirir. Tekrar sınırlarını, öncelik kuyruğunu ve metinleri `HUDQueue` ile `DSCore.HUDCatalog` uygular. HUD-15 ("ilk Nit oynatması") motor olayı değildir; arayüz kalıcı bir bayrakla kendisi tetikler.
+
+### G-05: Altyazı parlaklığı
+
+**Karar:** `s_sub = H_eff^t`, `t ∈ [0, 1]`, varsayılan 0, kabul edildi. Referans'ta altyazı katmanı **SDR**'dır ve kaydırıcı devre dışıdır (§4.7).
+
+### G-06: Siyah banda taşıma (SRT ve ASS)
+
+**Karar:** Evet. libass'in kenar boşluğu API'si kullanılır: `ass_set_margins` + `ass_set_use_margins(1)`.
+- Konumlandırılmamış olaylar banda taşınır; `\pos` ile konumlanmış tabelalar video alanında kalır **[doğrulandı: libass]**.
+- Yatayda 2,39:1 içerikte alt bant ≈ 53 px'tir; tek satır sığar (§4.7).
+
+### G-07: VobSub
+
+**Karar:** **M6'ya eklendi.** FFmpeg `dvdsub` → PGS ile aynı yol (§4.7, K-36). H-10 artık VobSub için kullanılmaz.
+
+### G-08: PGS boyut ölçeği
+
+**Karar:** Uzman seçeneği, %80–150, varsayılan %100. Ölçekleme alt-orta nokta etrafında yapılır; güvenli alana kırpılır (§4.7). Komut: `setPGSScale`.
+
+### G-09: S1 parça seçimi ve erişilebilirlik tercihleri
+
+**Karar:** `MACaptionAppearanceGetDisplayType`, `…CopyPreferredCaptioningMediaCharacteristics` (SDH) ve `MAAudibleMediaCopyPreferredCharacteristics` (sesli betimleme) kurallara eklendi (§4.7) **[doğrulandı]**.
+
+### G-10: "Yanıp Sönen Işıkları Azalt"
+
+**Karar.** Nit'te **uygulanabilir.** iOS 17'den beri `MAFlashingLightsProcessor`, özel video hatları için var **[doğrulandı]**.
+- **Akış:** `MADimFlashingLightsEnabled()` açıksa Geçiş B çıktısı IOSurface destekli bir ara dokuya yazılır → `processSurface(_:outSurface:timestamp:options:)` → drawable'a kopyalanır.
+- **Maliyet:** Ek ara doku ≈ 22 MB, kopya + işleme ≈ 0,5–1 ms **[ölçülmeli]**. Bütçe aşılırsa yalnızca bu ayar açıkken 4,5 ms tavanı aşılabilir; kullanıcının erişilebilirlik ayarı önceliklidir.
+- **`canProcessSurface` RGBA16F / extended linear P3 için `false` dönerse** (belgeye göre desteklenmeyen renk uzayında olabilir), tasarımın kartı gösterilir: "Nit bu ayarı uygulayamıyor; varsayılanı Referans yap?"
+- **Referans yolu:** Belge özel çizimi "AVFoundation API'leri yerine" diye ayırıyor. `AVSampleBufferDisplayLayer` yolunun ayarı kendiliğinden uyguladığı **[doğrulanmalı, AS-31]**.
+- Bu bir kullanıcı ayarıdır; P-1 ihlali sayılmaz (K-34, R14).
+
+### G-11: Zaman çizgisi önizleme görselleri (v1.1)
+
+**Karar: v1.1.**
+- **Jellyfin 10.9+ trickplay:** Sunucunun ürettiği karo görseller kullanılır (API yolu **[doğrulanmalı]**).
+- **Yerel üretim:**
+  - Ön planda ve boştayken çalışır.
+  - IDR kareleri 10 sn aralıkla VT ile 1/8 çözünürlükte (≈ 240 px) çözülür ve karo dosyalarına yazılır (HEIC), başlık önbelleğinde tutulur.
+  - 2 saatlik bir filmde ≈ 720 kare, ≈ 15–30 sn **[ölçülmeli]**.
+  - SMB'de yalnızca IDR örnekleri okunur (MKV Cues).
+
+### G-12: USB DAC'ta ses yüksekliği eşitleme
+
+**Teyit:** DAC rotasında eşitleme varsayılan olarak **Kapalı**, boost %100'dür. Bit-perfect yolunda DSP yoktur (§5.2, §5.6, K-26). Kullanıcı açarsa N-3 gösterilir.
+
+### G-13: `MPVolumeView`
+
+**Karar:**
+- Yalnızca ses düzeyi kaydırıcısı olarak kullanılır. Rota için `AVRoutePickerView` kullanılır; `MPVolumeView`'ın rota düğmesi kullanılmaz.
+- Now Playing framework'ünün uyarısı yerel çalmada `MPNowPlayingInfoCenter` ve `MPRemoteCommandCenter` içindir; `MPVolumeView` bu kapsamda değildir. Birlikte kullanımları S8'de doğrulanır **[doğrulanmalı]**.
+- Yedek: donanım düğmeleri ve sistem ses HUD'u.
+
+### G-14: Now Playing'de film
+
+**Karar:**
+- **Komutlar:** `MediaCommand.skipForward(preferredIntervals: [10])`, `.skipBackward(preferredIntervals: [10])`, `.seekToPosition` ve rev. 6 için `.changePlaybackRate(supported: [0.5, 0.75, 1, 1.25, 1.5, 1.75, 2])` (iOS 27) **[doğrulandı]**.
+- **Poster:** 2:3 poster olduğu gibi verilir. Sistem kareye kırpıyorsa (S8'de bakılır), siyah kare tuvalin ortasına yerleştirilmiş poster üretilir **[doğrulanmalı]**.
+
+### G-15: Kimlik doğrulama
+
+**Karar (K-35):**
+- **Plex:** PIN + web akışı.
+  1. `POST https://plex.tv/api/v2/pins?strong=true`
+  2. `ASWebAuthenticationSession` ile `https://app.plex.tv/auth#?clientID=…&code=…` açılır.
+  3. `GET /api/v2/pins/{id}` ile yoklanır; `authToken` alınıp Keychain'e yazılır.
+  - Yedek: 4 karakterlik kod ve plex.tv/link.
+  - Uç nokta adları **[doğrulanmalı]**.
+- **Jellyfin:** Kullanıcı/parola (`/Users/AuthenticateByName`) + **Quick Connect** MVP'de.
+  1. `/QuickConnect/Initiate` ile kod alınır.
+  2. Kullanıcı kodu başka bir cihazda onaylar.
+  3. `/Users/AuthenticateWithQuickConnect` ile oturum açılır.
+  - Parolasız ve ucuz bir yol. Uç nokta adları **[doğrulanmalı]**.
+
+### G-16: PiP'te yazılım çözücüler
+
+**Karar:** **Çalışır; PiP düğmesi bu içeriklerde etkindir.** Arka planda CPU çözmeye devam eder ve kareler Referans katmanına verilir. Taramalı içerikte deinterlace CPU'da yapılır (§3.12). Maliyet AS-31'de ölçülür.
+
+### G-17: A/B ve bant haritası parametreleri
+
+**Karar:** Shader'a üç değer olarak verilir: `abSplit` (tek değer, 0…1), `bandMapAlpha` (0,4) ve `bandMapColor` (doğrusal P3 `(1, 0, 1)`, SDR seviyesinde) (§3.9). Ayraç çizgisini arayüz katmanı çizer.
+
+### G-18: Dikeyde video kayması ve döndürme
+
+**Karar:**
+- **Kayma:** Yalnızca katman konum dönüşümüyle yapılır; drawable tam ekran olduğu için değişmez (K-33).
+- **Döndürme:** Eski içerik animasyon boyunca ölçeklenir. Yeni drawable `presentsWithTransaction` ile, son kare yeniden çizilerek aynı işlemde sunulur. Siyah kare olmaz (§3.9). Sprint 2'de test edilir; S0 yalnızca yataydır.
+
+### G-19: `Diagnostics` modül sınırı
+
+**Karar:** Kabul edildi (K-32, §9.1):
+- `Diagnostics` arayüzsüzdür.
+- Laboratuvar `App/Features/Lab`'dadır.
+- HUD bileşenleri `DesignSystem`'dedir.
+
+### G-20: Laboratuvar telemetrisine iki alan
+
+**Karar:** `chromeVisible` ve `panel` CSV'ye eklendi (§9.4). Arayüz bunları değiştikçe `TelemetryRecorder.annotate(ui:)` ile bildirir.
+
+### Tasarımda "bilinçli olarak tasarlanmayanlar" listesine not
+
+Rev. 6 ile **oynatma hızı** (§4.10) ve **elle altyazı gecikmesi** (§4.11) MVP'ye girdi. Motor tarafı hazır:
+- Komutlar: `setRate`, `setSubtitleDelay`
+- Olaylar: `playbackRateChanged`, `subtitleDelayChanged`
+- Now Playing: `changePlaybackRate`
+
+Tasarım ajanı bu ikisini panellere ekleyecek. Önerilen yerler:
+- Hız: Diğer paneli ya da alt şerit
+- Gecikme: Altyazı paneli
