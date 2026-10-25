@@ -7,6 +7,8 @@
 > - **OCR, çeviri ve otomatik altyazı senkronu kapsamdan çıktı:** Altyazılar videoyla birlikte, gömülü olarak geliyor.
 > - **OLED koruması parlaklığa dokunmayacak şekilde yeniden tanımlandı (P2).**
 >
+> **Rev. 3 (kullanıcı kararı):** AI diyalog netleştirme MVP'ye ayrı bir madde olarak eklendi (M9). MVP 9 özellik oldu.
+>
 > **İşaretler:** **[doğrulandı]** = Apple dokümantasyonu, WWDC oturumu ya da iOS 27 sürüm notlarıyla teyit edildi. **[doğrulanmalı]** = ikincil kaynak, forum raporu ya da çıkarım. Ajan 2 bunları spike ile teyit etmeli.
 >
 > **Puanlar:** **W** = wow etkisi (1–5). **F** = A13 + iOS 27 üzerinde fizibilite (1–5). 5, bilinen API ile kesin yapılabilir demek; 1, pratikte imkânsız demek.
@@ -16,7 +18,7 @@
 ## 0. Yönetici özeti
 
 - **Vizyon:** Kendi diskinden aldığın film ve müzik, iPhone 11 Pro'nun verebileceği en sadık görüntü ve sesle oynar. Tek dokunuş yeter, ayar gerekmez, tüm AI cihazda çalışır.
-- **MVP (8 özellik):**
+- **MVP (9 özellik):**
   1. Evrensel oynatma çekirdeği (MKV/ISO/BDMV)
   2. **Nit Çekirdeği: SDR ve HDR'da tipik beyaz yaklaşık 1200 nit (en öncelikli)**
   3. HDR ve Dolby Vision çözme (P7'nin P8.1'e dönüştürülmesi dahil). Nit Çekirdeğini besler; ayrıca "Referans" modu var.
@@ -25,6 +27,7 @@
   6. Gömülü altyazı (MKV içindeki PGS/SRT/ASS parçaları ekran çözünürlüğünde)
   7. Kaynaklar ve kütüphane (SMB, Jellyfin, Plex)
   8. Sıfır ayar deneyimi
+  9. AI diyalog netleştirme (stereoda AUSoundIsolation, çok kanallıda merkez kanal)
 - **iOS 27 araştırmasından çıkan üç kritik ders:**
   1. iOS 27 iPhone 11 Pro'yu destekliyor. Ancak A13 "temel katmanda": Apple Intelligence yok, Metal 4 yok, SpeechTranscriber muhtemelen yok.
   2. iOS 27 ile gelen yeni ML API'lerinin (Core AI, Music Understanding, VTFrameProcessor) A13'te nasıl çalıştığı belgelenmemiş. Bu yüzden MVP bunlara **bağımlı olmamalı**. Bu API'ler "varsa kullan" katmanında durur.
@@ -255,18 +258,19 @@ Rev. 2: V12 (Nit Çekirdeği, W×F = 20) kullanıcı kararıyla 1 numaralı öze
 
 ## 5. MVP seçimi
 
-### 5.1 MVP: çekirdek deneyim (8 özellik)
+### 5.1 MVP: çekirdek deneyim (9 özellik)
 
 | # | MVP özelliği | Kapsam (dahil) | Kapsam dışı | Fikir ID'leri | Kullanıcı açısından başarı ölçütü |
 |---|---|---|---|---|---|
 | M1 | **Evrensel oynatma çekirdeği** | MKV, MP4, M2TS, ISO ve BDMV (ana film tespiti). HEVC ve H.264 donanımla; AV1 (≤1080p), VC-1 ve MPEG-2 yazılımla çözülür. 3:2 kadans, temel deinterlace, PiP ve arka planda ses. | Menüler, 3D/MVC | V1, S3, V8 (yalnızca kadans), V11 | Kendi UHD remux arşivinin %95'i ilk denemede ve takılmadan oynar. |
 | M2 | **Nit Çekirdeği: tipik beyaz yaklaşık 1200 nit (EN ÖNCELİKLİ)** | Aşağıdaki "M2 ayrıntısı" bölümüne bakın. SDR ve HDR'da beyaz panelin tepe parlaklığına çıkar. Varsayılan mod "Nit"; isteyene "Referans" modu (Apple'ın native HDR/DV yolu, disk neyse o) sunulur. Kontroller SDR'da kalır, gözü almaz. | Parlaklık ve beyaz noktanın kullanıcı tarafından değiştirilmesi (sistem ayarı) | V12, V5, P1 | Aynı SDR film, Apple TV uygulamasındaki SDR'dan belirgin şekilde parlak görünür. Beyaz yamada ölçülen değer panel tepe değerine yakındır. 2 saatte kare kaybı 0. |
 | M3 | **HDR ve Dolby Vision çözme** | HDR10, HLG ve DV P5/P8 çözülür ve Nit Çekirdeğine verilir. DV P7 → P8.1 dönüşümü yapılır. Referans modunda native EDR/DV yolu kullanılır. HDR rozeti ve teşhis kartı. | HDR10+ (v1.1) | V1, V2, V5, S2 | P5, P7 ve P8 test dosyaları iki modda da doğru renkle oynar. Referans modunda DV tetiklenir. |
-| M4 | **Rotaya göre sinema sesi** | E-AC-3 JOC'un native Atmos'a verilmesi. TrueHD ve DTS-HD MA'nın 7.1'e açılıp uzamsal sese aktarılması. Merkez kanal diyalog yükseltme ve gece modu. Bluetooth gecikme telafisi. | AUSoundIsolation ile stereo diyalog (v1.1) | A1, A3, A4, A5 (yalnızca merkez kanal) | AirPods'ta Atmos/uzamsal göstergesi yanar. Diyalog modu her dosyada çalışır. |
+| M4 | **Rotaya göre sinema sesi** | E-AC-3 JOC'un native Atmos'a verilmesi. TrueHD ve DTS-HD MA'nın 7.1'e açılıp uzamsal sese aktarılması. Gece modu. Bluetooth gecikme telafisi. Diyalog netleştirme M9'da. | — | A1, A3, A4 | AirPods'ta Atmos/uzamsal göstergesi yanar. |
 | M5 | **Audiophile müzik** | FLAC, ALAC, WAV ve AIFF gapless. Bit-perfect DAC ve örnekleme hızı geçişi, sinyal yolu görünümü. R128/ReplayGain loudness. Temel albüm modu. | DSD, müzikal geçişler | A2, A7, L3 | DAC ekranı dosyanın örnekleme hızını gösterir. Albümler kesintisiz çalar. |
 | M6 | **Gömülü altyazı** (rev. 2'de sadeleşti) | MKV içindeki PGS, SRT ve ASS parçaları ekran çözünürlüğünde, doğru zamanlamayla render edilir. Görüntüye yakılmış altyazıda ek iş gerekmez. Altyazı parlaklığı videodan ayrı ayarlanabilir. | OCR, çeviri, otomatik senkron (kapsam dışı) | P3 | Test setindeki tüm gömülü altyazı parçaları doğru konum ve zamanlamayla görünür. |
 | M7 | **Kaynaklar ve kütüphane** | Files/yerel, SMB, Jellyfin ve Plex. Bonjour ile keşif. TMDB meta verisi. Kalite rozetleri ve kalite rafı. | DLNA (multicast onayına bağlı), Trakt (v1.1) | S4, L1, L2 | Yeni bir NAS üç dokunuşta kütüphaneye eklenir. |
 | M8 | **Sıfır ayar deneyimi** | Akıllı parça seçimi. Kaldığın yerden devam ve iCloud senkronu. OLED arayüzü ve yanma koruması (yalnızca arayüz öğeleri; parlaklık düşürülmez). Oynatma sırasında otomatik kilit kapalı. Now Playing framework. Isıyı gözeten kalite yöneticisi. Katmanlı (basit/uzman) arayüz. | — | S1, S5, S6, S7, P1, P2, V6 | İlk açılışta hiçbir ayara dokunmadan "doğru" oynatma. |
+| M9 | **AI diyalog netleştirme** (rev. 3, kullanıcı kararı) | **Stereo ve 2.0 içerik:** AUSoundIsolation (cihaz içi ML ses izolasyonu) ayrılmış sesi üretir. Bu ses orijinalin üzerine ayarlanabilir oranda geri karıştırılır; yani müzik ve efekt silinmez, yalnızca konuşma öne çıkar. **Çok kanallı içerik (5.1/7.1):** Merkez kanal yükseltilir. İsteğe bağlı olarak merkez kanala da izolasyon uygulanıp efekt sızıntısı bastırılır. Tek bir "Diyalog" düğmesi ve 3 kademe vardır. Görüntüyle senkron korunur (gecikme telafisi). | Konuşmanın metne çevrilmesi (I2, v2) | A5 | Seçilmiş 10 "fısıltı sahnesinde" diyalog belirgin şekilde anlaşılır hale gelir. Müzik ve efekt kaybı duyulmaz. Ses ile görüntü arasında kayma 0. CPU/ANE bütçesi AS-12'ye uyar. |
 
 ### 5.1.1 M2 ayrıntısı: Nit Çekirdeği
 
@@ -311,7 +315,7 @@ VideoToolbox (HEVC/H.264 donanım çözme) ─► CVPixelBuffer (10/8-bit YCbCr)
 
 **v1.1: Derinlik** (MVP'den sonra)
 - V3 Ekrana göre dinamik ton eşleme · V4 HDR10+
-- A5+ Stereo diyalog netleştirme (AUSoundIsolation) · A6 Kulaklık EQ'su ve crossfeed · A10 Taptic subwoofer
+- A6 Kulaklık EQ'su ve crossfeed · A10 Taptic subwoofer
 - I4 İntro ve jenerik atlama · I6 Akıllı kapak · A11 Sahte hi-res dedektörü
 - V7 Akıllı doldurma · P6 Pil tahmini · L4 Trakt/Jellyfin/Plex senkronu
 
@@ -365,7 +369,7 @@ Her soru "şu çalışır mı?" biçiminde yazıldı ve ölçülebilir bir başa
 | AS-9 | MKV'den gelen sıkıştırılmış E-AC-3 JOC örnekleri AVSampleBufferAudioRenderer'a verildiğinde AirPods Pro'da **Dolby Atmos olarak uzamsal render** edilir mi? | Denetim Merkezi'nde Atmos/uzamsal göstergesi yanar. Aynı dosyanın MP4 sürümü AVPlayer'da nasıl duyuluyorsa öyle duyulur. | A3 |
 | AS-10 | TrueHD 7.1'i FFmpeg ile PCM'e çözmek **bir P çekirdeğinin < %15'ini** kullanır mı? 7.1 PCM sistem uzamsallaştırmasına head tracking'li gider mi? | Instruments CPU ölçümü. Kulaklıkta kanallar doğru yerleşir (kanal test dosyası). | A4 |
 | AS-11 | USB DAC'ta `setPreferredSampleRate` 44.1, 48, 96 ve 192 kHz geçişlerini **gerçekten DAC'a yansıtır** mı? Sinyal yolu bit-perfect mi? | DAC ekranında doğru hız görünür. Bit-perfect test dosyası (ör. HDCD/MQA işaretli dosya ya da loopback karşılaştırması) bit eşitliği verir. | A2 |
-| AS-12 | AUSoundIsolation bir **oynatma** zincirinde (mikrofonda değil) çalışır mı? Gecikmesi < 50 ms, CPU kullanımı < %20 olur mu? | AVAudioEngine prototipi; ölçüm. | A5 |
+| AS-12 | **(rev. 3: MVP, yüksek öncelik)** AUSoundIsolation bir **oynatma** zincirinde (mikrofonda değil) A13'te gerçek zamanlı çalışır mı? Gecikmesi < 50 ms, CPU kullanımı < %20 olur mu? Hangi örnekleme hızı ve kanal düzenlerini kabul ediyor? Arka planda ve kilit ekranında da çalışıyor mu? | AVAudioEngine prototipi; ölçüm. Toplam gecikme video tarafında telafi edilir. | A5, M9 |
 | AS-13 | Ses çalarken ve uygulama arka plandayken PCM işleme zinciri (EQ, loudness, crossfeed) **sesi kesmeden** çalışır mı? Gerçek zamanlı ses thread'i bütçesi aşılır mı? | 1 saatte 0 glitch, kilit ekranında. | A1, A6, A7 |
 
 ### 6.3 AI
