@@ -101,7 +101,9 @@ final class NitCurveTests: XCTestCase {
             while x < 1e4 {
                 let y = curve(x)
                 XCTAssertGreaterThanOrEqual(y, previous)
-                XCTAssertLessThan(y, 1)
+                // Matematiksel olarak f < 1; çok büyük x'te Double 1,0'a doyar. Garanti edilen: f ≤ 1 (P-2).
+                XCTAssertLessThanOrEqual(y, 1)
+                if x <= 10 { XCTAssertLessThan(y, 1) }
                 previous = y
                 x *= 1.05
             }
