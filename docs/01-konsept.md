@@ -13,6 +13,8 @@
 > - `01b-ek-fikirler.md` onaylandı. **N1 Temiz Nit**, M2'nin ayrılmaz parçası olarak MVP'de. **N2 Ses Çekirdeği** v1.1'in ilk işi.
 > - **M10 ses yükseltme (boost)** MVP'ye eklendi. En fazla %50; %150, yaklaşık +6 dB demek. MVP 10 özellik oldu.
 >
+> **Rev. 5 (kullanıcı kararı):** **Sahne bazlı referans beyaz tespiti** (V3'ün `L_ref` kısmı) v1.1'den MVP'ye, M2'nin içine çekildi. Gerekçe: Normal beyazı 100–150 nite koyan HDR10 filmlerde "Maksimum" modunda beyaz 640–980 nitte kalıyordu (`02-cozum.md` §3.5). Tam dinamik ton eşleme v1.1'de kalıyor.
+>
 > **İşaretler:** **[doğrulandı]** = Apple dokümantasyonu, WWDC oturumu ya da iOS 27 sürüm notlarıyla teyit edildi. **[doğrulanmalı]** = ikincil kaynak, forum raporu ya da çıkarım. Ajan 2 bunları spike ile teyit etmeli.
 >
 > **Puanlar:** **W** = wow etkisi (1–5). **F** = A13 + iOS 27 üzerinde fizibilite (1–5). 5, bilinen API ile kesin yapılabilir demek; 1, pratikte imkânsız demek.
@@ -268,7 +270,7 @@ Rev. 2: V12 (Nit Çekirdeği, W×F = 20) kullanıcı kararıyla 1 numaralı öze
 | # | MVP özelliği | Kapsam (dahil) | Kapsam dışı | Fikir ID'leri | Kullanıcı açısından başarı ölçütü |
 |---|---|---|---|---|---|
 | M1 | **Evrensel oynatma çekirdeği** | MKV, MP4, M2TS, ISO ve BDMV (ana film tespiti). HEVC ve H.264 donanımla; AV1 (≤1080p), VC-1 ve MPEG-2 yazılımla çözülür. 3:2 kadans, temel deinterlace, PiP ve arka planda ses. | Menüler, 3D/MVC | V1, S3, V8 (yalnızca kadans), V11 | Kendi UHD remux arşivinin %95'i ilk denemede ve takılmadan oynar. |
-| M2 | **Nit Çekirdeği: tipik beyaz yaklaşık 1200 nit (EN ÖNCELİKLİ)** | Aşağıdaki "M2 ayrıntısı" bölümüne bakın. SDR ve HDR'da beyaz panelin tepe parlaklığına çıkar. Varsayılan mod "Nit"; isteyene "Referans" modu (Apple'ın native HDR/DV yolu, disk neyse o) sunulur. Kontroller SDR'da kalır, gözü almaz. **Temiz Nit (N1, rev. 4)** bu hattın parçasıdır: 8-bit kaynakta, yalnızca nihai parlaklıkta görünür olacak bantlar giderilir (bkz. `01b-ek-fikirler.md` §2). | Parlaklık ve beyaz noktanın kullanıcı tarafından değiştirilmesi (sistem ayarı) | V12, V5, P1, N1 | Aynı SDR film, Apple TV uygulamasındaki SDR'dan belirgin şekilde parlak görünür. Beyaz yamada ölçülen değer panel tepe değerine yakındır. 2 saatte kare kaybı 0. |
+| M2 | **Nit Çekirdeği: tipik beyaz yaklaşık 1200 nit (EN ÖNCELİKLİ)** | Aşağıdaki "M2 ayrıntısı" bölümüne bakın. SDR ve HDR'da beyaz panelin tepe parlaklığına çıkar. Varsayılan mod "Nit"; isteyene "Referans" modu (Apple'ın native HDR/DV yolu, disk neyse o) sunulur. Kontroller SDR'da kalır, gözü almaz. **Temiz Nit (N1, rev. 4)** bu hattın parçasıdır: 8-bit kaynakta, yalnızca nihai parlaklıkta görünür olacak bantlar giderilir (bkz. `01b-ek-fikirler.md` §2). | Parlaklık ve beyaz noktanın kullanıcı tarafından değiştirilmesi (sistem ayarı) **Sahne bazlı referans beyaz (rev. 5):** HDR'da `L_ref` sabit 203 nit değildir. Sahne bazında DV L1 meta verisinden ya da HDR10 histogramından tespit edilir; böylece her filmde beyaz hedefte (≈ 0,95 H) kalır. | V12, V5, P1, N1, V3 (yalnızca `L_ref`) | Aynı SDR film, Apple TV uygulamasındaki SDR'dan belirgin şekilde parlak görünür. Beyaz yamada ölçülen değer panel tepe değerine yakındır. 2 saatte kare kaybı 0. |
 | M3 | **HDR ve Dolby Vision çözme** | HDR10, HLG ve DV P5/P8 çözülür ve Nit Çekirdeğine verilir. DV P7 → P8.1 dönüşümü yapılır. Referans modunda native EDR/DV yolu kullanılır. HDR rozeti ve teşhis kartı. | HDR10+ (v1.1) | V1, V2, V5, S2 | P5, P7 ve P8 test dosyaları iki modda da doğru renkle oynar. Referans modunda DV tetiklenir. |
 | M4 | **Rotaya göre sinema sesi** | E-AC-3 JOC'un native Atmos'a verilmesi. TrueHD ve DTS-HD MA'nın 7.1'e açılıp uzamsal sese aktarılması. Gece modu. Bluetooth gecikme telafisi. Diyalog netleştirme M9'da. | — | A1, A3, A4 | AirPods'ta Atmos/uzamsal göstergesi yanar. |
 | M5 | **Audiophile müzik** | FLAC, ALAC, WAV ve AIFF gapless. Bit-perfect DAC ve örnekleme hızı geçişi, sinyal yolu görünümü. R128/ReplayGain loudness. Temel albüm modu. | DSD, müzikal geçişler | A2, A7, L3 | DAC ekranı dosyanın örnekleme hızını gösterir. Albümler kesintisiz çalar. |
@@ -321,7 +323,7 @@ VideoToolbox (HEVC/H.264 donanım çözme) ─► CVPixelBuffer (10/8-bit YCbCr)
 
 **v1.1: Derinlik** (MVP'den sonra)
 - **N2 Ses Çekirdeği (ilk iş, rev. 4):** Dinleme seviyesine göre ton düzeltmesi ve isteğe bağlı odyogram katmanı (bkz. `01b-ek-fikirler.md` §3).
-- V3 Ekrana göre dinamik ton eşleme · V4 HDR10+
+- V3 Ekrana göre tam dinamik ton eşleme (sahne bazlı `L_ref` rev. 5'te MVP'ye alındı) · V4 HDR10+
 - A6 Kulaklık EQ'su ve crossfeed · A10 Taptic subwoofer
 - I4 İntro ve jenerik atlama · I6 Akıllı kapak · A11 Sahte hi-res dedektörü
 - V7 Akıllı doldurma · P6 Pil tahmini · L4 Trakt/Jellyfin/Plex senkronu
