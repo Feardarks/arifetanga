@@ -4,7 +4,7 @@
 >
 > **Girdiler (bağlayıcı):**
 > - `docs/00-brief.md`
-> - `docs/01-konsept.md` rev. 4: MVP 10 özellik; M10 boost dahil
+> - `docs/01-konsept.md` rev. 5: MVP 10 özellik; M10 boost dahil. Rev. 5 ile sahne bazlı `L_ref` MVP'de ve M2'nin parçası (§3.5.1).
 > - `docs/01b-ek-fikirler.md`: N1 Temiz Nit MVP'de ve M2'nin parçası; N2 Ses Çekirdeği v1.1'in ilk işi
 >
 > **İşaretler:**
@@ -35,6 +35,7 @@
    - SDR'da beyaz = `H`.
    - HDR'da "Maksimum" modunda beyaz = 0,95 `H`, "Dengeli" modunda 0,75 `H`.
    - Vurgular log uzayında üstel bir omuzla sıkıştırılır. Çıkış hiçbir zaman `H`'yi aşmaz, yani kırpma olmaz.
+   - **HDR'da referans beyaz (`L_ref`) sabit 203 nit değil, sahne bazında tespit edilir (rev. 5, MVP).** Kaynak DV'de L1, HDR10'da kendi histogramımızın P90 değeridir. Değer film çapasından en fazla ±0,5 stop sapabilir ve 80–300 nit arasında kalır (§3.5.1).
 4. **Headroom takibi ve Tepe Kilidi:**
    - Headroom düşünce anında, yükselince 150 ms'de takip edilir.
    - **Tepe Kilidi**, sistem parlaklığını (`UIScreen.brightness`) **yalnızca yükseltir**: headroom dirseğine kadar. Headroom çökerse SDR tepesine kadar.
@@ -82,6 +83,7 @@ Uygulama aşamasında ilk kodlanacak şey budur. Kapsamı ve başarı ölçütle
 
 - **Kapsam:** Tek ekran, yerel bir SDR ve bir HDR10 dosyası, headroom göstergesi, Nit/Referans geçişi.
 - **Yanında:** CI ve imza iskeleti, AS-33 (EDR çıkış zincirinde bant ve titreşim testi) ve 2 saatlik headroom kaydı.
+- **Hemen ardından S0b (AS-38):** Sahne bazlı `L_ref` aynı prototip üzerine eklenir (§10.2).
 
 ### 0.4 MVP'ye önerilen netleştirmeler
 
@@ -130,7 +132,7 @@ Bunlar kapsam değişikliği değil; kök kısıtlardan çıkan netleştirmelerd
 | # | Problem | Kök kısıt | Seçilen çözüm ve API'ler | Yedek plan | Risk |
 |---|---|---|---|---|---|
 | **M1** Evrensel oynatma | MKV, M2TS, ISO ve BDMV açılmalı. VC-1, MPEG-2 ve AV1 çözülmeli. 4K remux takılmadan oynamalı. | iOS'ta MediaExtension yok **[doğrulandı]**. AVFoundation MKV açmıyor. A13'te AV1, VC-1 ve MPEG-2 için donanım çözücü yok. | `libavformat` + özel `AVIOContext` · `libbluray`/`libudfread` (ana başlık, seamless branching) · `VTDecompressionSession` (H.264, HEVC Main/Main10) · FFmpeg (VC-1, MPEG-2, MPEG-4 ASP, VP9) · dav1d (AV1 ≤ 1080p) · `AVSampleBufferRenderSynchronizer` saati · Metal deinterlace · 3:2 kadans (§3.8) | VT bir HEVC akışını reddederse (4:2:2, 12-bit) FFmpeg `hevc` yazılım çözücüsüne geçilir (≤ 1080p). 4K AV1'de "desteklenmiyor" kartı ve nedeni gösterilir. | Orta (AS-3, AS-7, AS-8) |
-| **M2** Nit Çekirdeği + N1 | SDR ve HDR'da beyaz ≈ 1200 nit olmalı; bant olmamalı. | Headroom'u sistem verir: kaydırıcı, 8× sınırı, ısı, Düşük Güç Modu, ABL. Panelin nit değeri public API ile okunamaz. Arka planda GPU yok. Mac yok, dolayısıyla Instruments yok. | §3'ün tamamı: CAMetalLayer EDR, `currentEDRHeadroom`, kapalı form eğri, Tepe Kilidi, `present(at:)`, Temiz Nit | Headroom çökerse Tepe Kilidi SDR tepesini korur. GPU bütçesi aşılırsa yalnızca hesap kalitesi düşer, parlaklık asla. | **Yüksek** (R1) |
+| **M2** Nit Çekirdeği + N1 | SDR ve HDR'da beyaz ≈ 1200 nit olmalı; bant olmamalı. | Headroom'u sistem verir: kaydırıcı, 8× sınırı, ısı, Düşük Güç Modu, ABL. Panelin nit değeri public API ile okunamaz. Arka planda GPU yok. Mac yok, dolayısıyla Instruments yok. | §3'ün tamamı: CAMetalLayer EDR, `currentEDRHeadroom`, kapalı form eğri, sahne bazlı `L_ref` (DV L1 / HDR10 histogramı, rev. 5), Tepe Kilidi, `present(at:)`, Temiz Nit | Headroom çökerse Tepe Kilidi SDR tepesini korur. GPU bütçesi aşılırsa yalnızca hesap kalitesi düşer, parlaklık asla. | **Yüksek** (R1) |
 | **M3** HDR ve DV | HDR10, HLG ve DV P5/P8 doğru renkte oynamalı. P7, P8.1'e çevrilmeli. | Apple, özel hatta DV tetiklemeyi belgelemiyor. VT, P7 FEL'i çözmüyor. Dolby'nin DM algoritması kapalı. | **Referans:** `dvcC`'li `CMVideoFormatDescription` + `AVSampleBufferDisplayLayer`. P7'de EL atılır, RPU `libdovi` mode 2 ile çevrilir. **Nit:** BL, VT'de düz HEVC olarak çözülür; RPU'dan çıkan reshaping ve matrisler shader'a verilir (§3.7). | Referans'ta DV tetiklenmezse HDR10 olarak oynar ve rozet "DV → HDR10" ile nedenini gösterir. Nit yolunda renk reshaping sayesinde zaten doğrudur. | **Yüksek** (AS-1, AS-2, AS-30) |
 | **M4** Sinema sesi | Atmos çalmalı. TrueHD ve DTS-HD uzamsal sese aktarılmalı. Gece modu ve BT gecikme telafisi olmalı. | TrueHD ve DTS için nesne çözücü yok. E-AC-3 JOC'yi yalnızca Apple render eder. | E-AC-3 JOC sıkıştırılmış olarak `AVSampleBufferAudioRenderer`'a gider (`allowedAudioSpatializationFormats` **[doğrulandı]**). TrueHD ve DTS → FFmpeg → 7.1 PCM (açık kanal tanımlı `AudioChannelLayout`). Gece modu önden evrede DRC. | JOC Atmos olarak tetiklenmezse Apple `AudioConverter` ile 5.1/7.1 PCM'e çözülür. | Orta–yüksek (AS-9, AS-10) |
 | **M5** Audiophile müzik | Bit-perfect, örnekleme hızı geçişi, gapless çalma ve loudness. | iOS mikseri her zaman yolda. Örnekleme hızı oturum düzeyinde. DAC ses seviyesi denetimi belirsiz. | `AVAudioSession.setPreferredSampleRate` (dosya hızı) · renderer'a dosyanın PCM'i, DSP bypass · R128 vDSP ile · gapless için sürekli PTS · sinyal yolu görünümü | Hız değiştirilemezse en yüksek kalitede `AVAudioConverter` kullanılır ve "bit-perfect değil" göstergesi yanar. | Orta (AS-11) |
@@ -257,11 +259,11 @@ Sabit HPE ters matrisi libplacebo'daki değerlerdir: `[[3.0644,−2.1660,0.1016]
 SDR  : x = max(E′,0)^γ                      γ = 2,4 (BT.1886, Lb = 0; OLED siyahı 0)
 PQ   : L = 10000 · ( max(E′^(1/m2) − c1, 0) / (c2 − c3·E′^(1/m2)) )^(1/m1)   [nit]
        m1 = 0,1593017578 · m2 = 78,84375 · c1 = 0,8359375 · c2 = 18,8515625 · c3 = 18,6875
-       x = L / L_ref,  L_ref = 203 nit (BT.2408 referans beyazı; uzman: 100–300)
+       x = L / L_ref,  L_ref = sahne bazlı tespit (§3.5.1; 80–300 nit); sabit kipte 203 nit (BT.2408)
 HLG  : E = E′²/3 (E′ ≤ ½);  E = (exp((E′ − c)/a) + b)/12 (E′ > ½)
        a = 0,17883277 · b = 0,28466892 · c = 0,55991073
-       OOTF (Lw = 1000, γ = 1,2): L = 1000 · Y_s^0,2 · E   ·   x = L / 203  (HLG %75 ≈ 203 nit)
-DV   : 1a'nın çıktısı L (nit) → x = L / 203
+       OOTF (Lw = 1000, γ = 1,2): L = 1000 · Y_s^0,2 · E   ·   x = L / L_ref  (sabit kipte 203; HLG %75 ≈ 203 nit)
+DV   : 1a'nın çıktısı L (nit) → x = L / L_ref
 ```
 
 - **SDR'da γ seçimi:** Varsayılan 2,4'tür. S0'da "tonalite eşleme testi" yapılır: Referans yolundaki SDR gri rampası ile Nit yolunda `H = 1`'e zorlanmış rampa yan yana gösterilir. iOS'un BT.709 videoyu ≈1,96 ya da 2,2 ile gösterdiği anlaşılırsa varsayılan ona çekilir **[doğrulanmalı]**. İlke: Nit, Referans'tan yalnızca **parlaklıkta** farklı olmalı, tonalitede değil.
@@ -323,13 +325,13 @@ y    = H_eff · f(x)        RGB_out = RGB · y / m   (m = maxRGB, beyaz-göreli)
 
 **Modlar:**
 
-| Mod | Parametre | Beyaz (203 nit) | Dirsek | Doğrusal kazanç |
+| Mod | Parametre | Beyaz (x = 1, yani `L_ref`) | Dirsek | Doğrusal kazanç |
 |---|---|---|---|---|
 | **SDR** | `f(x) = x` (x ≤ 1); süper beyaz 1'e kırpılır | **`H`** (panel tepesi) | — | `H` |
 | **HDR Maksimum** (varsayılan) | w = 0,95 · κ = 0,80 | **0,95 H** (1200 nitlik tepede ≈ 1140 nit) | x_k = 0,720 (≈ 146 nit) | 1,111 H |
 | **HDR Dengeli** | w = 0,75 · κ = 0,50 | **0,75 H** (≈ 900 nit) | x_k = 0,544 (≈ 110 nit) | 0,920 H |
 
-**Örnek değerler.** Tablo `f(x)` ile, 1200 nitlik tepe varsayımıyla hesaplandı. Sütunlar kaynak nit değerleridir.
+**Örnek değerler.** Tablo `f(x)` ile, 1200 nitlik tepe ve `L_ref = 203` varsayımıyla hesaplandı. Sütunlar kaynak nit değerleridir. Sahne bazlı `L_ref`'te (§3.5.1) sütunlar `L_ref / 203` oranında kayar; örneğin `L_ref = 120` iken 120 nitlik kaynak 1140 nite çıkar.
 
 | Kaynak (nit) | 1 | 10 | 50 | 100 | 150 | **203** | 300 | 406 | 600 | 1000 | 4000 |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -342,11 +344,133 @@ y    = H_eff · f(x)        RGB_out = RGB · y / m   (m = maxRGB, beyaz-göreli)
 - **SDR'da omuz yok:** SDR'ın tepesi zaten beyazdır. Süper beyazlar (Y′ > 1, limited range'de 941–1019 kodları) 1'e kırpılır.
 
 **Uzman parametreleri:**
-- `L_ref` (100–300 nit)
+- Sahne beyazı: Otomatik (varsayılan) ya da Sabit `L_ref` (80–300 nit) (§3.5.1)
 - Maksimum için `w` (0,90–0,98)
 - SDR `γ` (2,2 / 2,4 / Apple ile eşleşen)
 
-**v1.1 (V3):** `L_ref` sahne bazında uyarlanır. Kaynaklar: DV L1 ortalaması, HDR10'da histogram. Birçok HDR10 film diffuse beyazı 100–150 nite koyar; bunlarda Maksimum modunda "beyaz" ≈ 640–980 nitte kalır. Bu, MVP sonrası en önemli Nit iyileştirmesidir.
+**Sahne bazlı `L_ref` MVP'ye alındı (rev. 5); tam dinamik ton eşleme v1.1'de.** Sabit `L_ref = 203` ile, diffuse beyazı 100–150 nite koyan HDR10 filmlerde Maksimum modunda beyaz ≈ 640–980 nitte kalıyordu. MVP'de yalnızca `L_ref` sahneye göre tespit edilir (§3.5.1). Eğrinin biçimini (κ, `w`) sahneye göre değiştiren tam dinamik ton eşleme v1.1'de kalır (V3, AS-4).
+
+#### 3.5.1 Sahne bazlı `L_ref` (MVP, rev. 5)
+
+**Amaç.** `L_ref`, o sahnenin diffuse beyazının tahminidir. Böylece her filmde beyaz `x ≈ 1` olur ve `f(1) = w` sayesinde hedefe oturur (Maksimum'da 0,95 `H`). SDR'da `L_ref` yoktur, çünkü SDR beyazı kod değeri olarak 1,0'dır. Bu bölüm yalnızca HDR10, HLG ve DV için geçerlidir.
+
+**Çıkış formülü:**
+
+```
+L_ref = clamp( A · clamp( Ŵ / A , 2^−δ , 2^+δ ) , L_min , L_max )        [nit]
+   Ŵ     : zamansal süzgeçten geçmiş sahne beyazı tahmini (aşağıda)
+   A     : film çapası, yani filmin tipik diffuse beyazı
+   δ     = 0,5 stop (uzman: 0–1) · L_min = 80 nit · L_max = 300 nit
+x = L / L_ref                       (kanal başına, beyaz-göreli; §3.4 adım 2)
+```
+
+**Kaynaklar ve öncelik sırası:**
+
+| Öncelik | İçerik | Sahne beyazı tahmini `W_s` | Not |
+|---|---|---|---|
+| 0 | Uzman "Sabit" kipi | `L_ref` = kullanıcı değeri (varsayılan 203) | Otomatik devre dışı |
+| 1 | **DV** (P5, P8.x, P7→8.1), L1 geçerliyse | `W_s = min(k · PQ⁻¹(avg_pq), PQ⁻¹(max_pq))`. **L2/L8 trim** varsa pozlama düzeltmesi uygulanır: `W_s ← W_s / e`. | L1 çekim başına sabittir ve mastering aracı tarafından tüm çekim üzerinden hesaplanır. Bu yüzden çekim içinde pompalama yapısal olarak imkânsızdır ve GPU maliyeti yoktur. `k` başlangıçta 4'tür (algısal ortalamanın ≈ 2 stop üstü). AS-38'de aynı DV içerikteki histogram P90 değerine göre kalibre edilir. |
+| 2 | **HDR10, HLG** ve L1'i geçersiz DV | Kendi histogramımız: `W_s = P90` (aşağıda) | **HDR10+** dinamik meta verisi v1.1'e kadar okunmaz; o zamana kadar histogram kullanılır. |
+| — | MaxFALL / MaxCLL | **Yalnızca başlangıç:** `A₀ = clamp(MaxFALL, 100, 203)`; MaxFALL yoksa 203. Ayrıca `W_s ≤ MaxCLL` (tavan). | MaxFALL en parlak karenin ortalamasıdır ve bir karenin ortalaması diffuse beyazı nadiren aşar. Bu yüzden MaxFALL < 203 olan filmlerde beyazın da 203'ün altında olması beklenir **[doğrulanmalı]**. |
+
+**L1 geçerliliği.** Bazı dönüştürülmüş RPU'larda L1 sabit ya da varsayılan değerlidir. İlk 2 dakikada L1 hiç değişmiyorsa ya da `max_pq` 4095 ise L1 "geçersiz" sayılır ve histograma geçilir.
+
+**L2/L8 trim kullanımı:**
+- Panel tepesine en yakın hedef seçilir (≈ 1000 nit; L2'de `target_max_pq`, L8'de `target_display_index`).
+- Trim'in slope, offset ve power değerleri ham kodlarından nötre göre çözülür. Diffuse beyaz adayına PQ uzayında uygulanır:
+  `e = PQ⁻¹(T(PQ(W_s))) / W_s`, `T(p) = (p·s + o)^pw`.
+- `e`, [2^−0,5, 2^+0,5] aralığına kırpılır.
+- Anlamı: kolorist parlak bir hedef ekran için beyazı açtıysa `L_ref` düşer ve beyaz açılır.
+- Alanların ölçeklenmesi ve semantiği **[doğrulanmalı: ETSI GS CCM 001 / libdovi alan adları]**.
+- Dolby'nin DM algoritmasının kendisi yine kullanılmaz (§3.7). Trim'ler yalnızca bu pozlama düzeltmesi için okunur.
+
+**Histogram (HDR10, HLG ve DV yedeği):**
+- **Örnekleme:** Ekrandaki video dikdörtgeninin her boyutta 1/4'ü. 16:9'da ≈ 500×281, yani ≈ 140 bin örnek. Bantlar (letterbox) dışarıda kalır.
+- **Nicelik:** Piksel başına `maxRGB`, PQ uzayında.
+  - HDR10'da `R′G′B′` zaten PQ kodludur. PQ monoton olduğu için `max(R′,G′,B′) = PQ(maxRGB)`; EOTF hesaplamak gerekmez.
+  - HLG'de §3.4'teki HLG yoluyla nite çevrilir, sonra PQ'ya kodlanır.
+  - DV yedeğinde reshaping ve LMS→RGB adımlarından sonra aynı şey yapılır.
+- **Girdi:** Kaynak kod değerleri. Temiz Nit çıktısı değil, ondan bağımsız. Altyazılar kaynakta olmadığı için histograma girmez.
+- **Kutular:** PQ [0, 1] aralığında 256 kutu. 100 nit civarında bir kutu ≈ 0,05 stop'tur. Kutu içinde doğrusal enterpolasyon yapılır.
+- **Metal uygulaması:** Compute çekirdeği her threadgroup için yerel bir histogram tutar (threadgroup belleğinde atomik toplama), sonra global tampona birleştirir. Tampon `storageModeShared`'dır; CPU onu bir sonraki karede okur ve beklemez. Bir karelik gecikme önemsizdir.
+- **Yüzdelik: P90, yalnızca ≥ 1 nit olan pikseller üzerinden.**
+  - **Neden yüksek bir yüzdelik?** Diffuse beyaz yüzeyler (gömlek, duvar, bulut) normal pozlanmış bir sahnenin en parlak onda birlik diliminde bulunur.
+  - **Neden P99 ya da tepe değil?** Vurgular ve ışık kaynakları tipik olarak karenin %5'inden azını kaplar. P99 ve tepe bunları ölçer; tepe tespiti diffuse beyazı değil vurguyu bulur.
+  - **Neden ortalama değil (Reinhard "anahtarı")?** Ortalama sahnenin kompozisyonuna bağlıdır. Karanlık bir gece sahnesini "pozu düşük" sanıp aydınlatır ve sanatsal niyeti bozar.
+  - **Neden ≥ 1 nit eşiği?** Siyah ve neredeyse siyah alanlar (gece gökyüzü, gölgeler) yüzdeliği aşağı çekmesin.
+  - **Bilinen zayıflık:** Gökyüzü ya da kar ağırlıklı sahnelerde P90 diffuse beyazın üstüne çıkar. Bunu film çapası sınırı (±0,5 stop) ve sahne içi yükselme sınırı (+0,2 stop) bastırır.
+
+**Film çapası `A`:**
+- Filmin şu ana kadarki sahnelerindeki `W_s` değerlerinin süre ağırlıklı medyanıdır (log2 uzayında).
+- Başlangıç değeri: başlık önbelleğinde varsa o değer, yoksa `A₀`.
+- Değişim hızı ≤ 0,1 stop/dk. İlk 5–10 dakikada oturur.
+- Her 5 dakikada ve film bitince başlık bazında kütüphaneye kaydedilir. İkinci izlemede çapa baştan doğrudur.
+- **Görevi:** Sahne tahmininin sapmasını sınırlamak. Kasıtlı olarak karanlık bir sahne çapanın en fazla 0,5 stop üstüne yükseltilir. Yani gece sahnesi gündüz sahnesi kadar parlak olmaz; sanatsal niyet korunur.
+
+**Sahne kesimi tespiti:**
+- **DV:** L1 değişimi ya da RPU'daki `scene_refresh_flag`. Hesap gerekmez.
+- **HDR10 ve HLG:** Ardışık karelerin 64 kutulu kaba histogramları arasında kümülatif fark hesaplanır (EMD, PQ biriminde): `d = Σ abs(CDF_t − CDF_{t−1}) / 64`.
+  - Kesim koşulu: `d > 0,08` **ve** `d > 4 ×` (son 2 s'deki `d` medyanı). İkinci koşul eşiği içeriğe uyarlar.
+  - Kare bir IDR karesiyse eşik %30 düşürülür, çünkü kodlayıcılar kesimlere genellikle anahtar kare koyar.
+  - İki kesim arasında en az 0,5 s olmalıdır.
+  - Kararmalar ve geçişler (fade, dissolve) yavaş olduğu için kesim sayılmaz; onları sahne içi süzgeç izler.
+  - Eşikler AS-38'de ayarlanır **[ölçülmeli]**.
+- **Sarma (seek)** her zaman kesim sayılır.
+- Kesim olayı **paylaşılan bir sinyaldir.** Temiz Nit'in bant haritası da aynı karede sıfırlanır.
+
+**Zamansal yumuşatma (log2 uzayında):**
+
+| Aşama | Kural | Etki |
+|---|---|---|
+| Kare ön süzgeci | Son 9 karenin `W_f` medyanı (24 fps'te ≈ 0,375 s) | Namlu alevi, şimşek gibi tek karelik flaşlar silinir |
+| **Kesimde (hızlı)** | Yeni sahnenin ilk 3 karesinin medyanı hedef olur. Geçiş τ = 0,25 s. | Değişimi kesimin kendisi maskeler |
+| **Sahne içinde, `L_ref` düşerken** (görüntü parlar) | τ = 4 s, hız ≤ 0,25 stop/s | Yavaş ve fark edilmez |
+| **Sahne içinde, `L_ref` yükselirken** (görüntü kararır) | τ = 8 s, hız ≤ 0,1 stop/s | Pompalamaya karşı ana koruma |
+| Sahne içi sapma sınırı | Sahne başındaki değere göre en fazla **+0,2 stop** yükselme ve −0,5 stop düşme | Parlak obje gelse bile beyaz en fazla ≈ %13 düşer, o da saniyeler içinde |
+| Ölü bant | 0,1 stop'tan küçük değişimler yok sayılır | Titreşim olmaz |
+| Film çapası | `A · 2^±δ` aralığına kırpılır, δ = 0,5 stop | Sanatsal niyet korunur |
+| Mutlak sınır | 80 ≤ `L_ref` ≤ 300 nit | Aşırı uçlar engellenir |
+
+**Pompalama önleme, özetle.** Kadraja parlak bir obje (far, patlama, beyaz çarşaf) girdiğinde:
+1. Obje karenin %10'undan azını kaplıyorsa P90 hiç değişmez.
+2. Daha büyükse `L_ref`'in yükselmesi sahne başına +0,2 stop ile sınırlıdır ve 8 s'lik zaman sabitiyle yavaş gelir.
+3. Tek karelik flaşları medyan süzgeci siler.
+4. DV'de L1 çekim boyunca sabit olduğundan çekim içinde pompalama olamaz.
+
+**Eğriyle etkileşim:**
+- `L_ref` yalnızca girdiyi ölçekler: `x = L / L_ref`. Eğrinin parametreleri (`w`, `κ`, `D`, `u_k`, `g`) `L_ref`'ten bağımsızdır. Kapalı form ve `f(1) = w` aynen geçerlidir; sahnenin diffuse beyazı her zaman `w · H`'ye oturur.
+- `f < 1` her `x` için geçerlidir. Bu yüzden **P-2 (çıkış ≤ `H_cur`) `L_ref` ne olursa olsun korunur.**
+- Çıkış `y = H_eff · f(L / L_ref)`. `H` çıkışı, `L_ref` girdiyi ölçekler. İkisi çarpımsal olarak ayrıdır; çapraz terim yoktur.
+- Uygulamada `1/L_ref` her karede bir uniform olarak verilir. LUT yeniden üretilmez. Shader'a maliyeti piksel başına bir çarpmadır.
+- Orta tonların etkin kazancı `g · H / L_ref`'tir. Örnek: diffuse beyazı 120 nit olan bir film Maksimum modunda, 1200 nitlik tepede, beyazını ≈ 1140 nitte gösterir. Sabit 203 ile ≈ 750 nitte kalırdı.
+
+**Temiz Nit ve headroom filtresiyle etkileşim: üç filtre, üç değişken.**
+
+| Filtre | Sahibi olduğu değişken | Girdisi | Zaman ölçeği |
+|---|---|---|---|
+| Headroom (§3.6) | `H_eff` (çıkış ölçeği) | Sistem (`currentEDRHeadroom`) | Düşüşte 0, yükselişte 150 ms |
+| Sahne beyazı (bu bölüm) | `L_ref` (girdi ölçeği) | **Kaynak** histogramı ya da L1 | Kesimde 0,25 s; sahne içinde 4–8 s |
+| Temiz Nit (N1) | Bant haritası (karo başına açık/kapalı) | Kaynak kod değerleri | Karo başına ≈ 0,5 s histerezis |
+
+Kurallar:
+1. Her filtre tek bir değişkenin sahibidir. Hiçbiri diğerinin çıktısını girdi olarak kullanmaz.
+2. `L_ref` çıkıştan değil **kaynaktan** hesaplanır. Bu yüzden `H` ile bir geri besleme döngüsü kurulamaz. AS-27'deki APL riski `L_ref`'e taşınmaz.
+3. Temiz Nit'in görünürlük eşiği nihai nit değerine bağlıdır (LUT[kod, H]). 10-bit HDR'da bu değer artık `H_eff · f(L / L_ref)`'tir ve her pikselde o anki uniform'lardan hesaplanır. Ayrı bir süzgeç eklenmez. 8-bit SDR'da `L_ref` yoktur, dolayısıyla etkileşim de yoktur.
+4. Sahne kesimi tek bir yerde tespit edilir ve iki tüketiciye (`L_ref` ve N1 bant haritası) aynı karede iletilir.
+
+**GPU bütçesi.** Histogram 1/4 çözünürlükte ≈ 0,1–0,3 ms sürer **[ölçülmeli]**. Kesim metriği ve süzgeç CPU'da çalışır; maliyetleri ihmal edilebilir. **Toplam M2 tavanı ≤ 4,5 ms olarak korunur** (§3.10). 4K HDR10'da en kötü durum ≈ 3,6 ms'dir. SDR'da histogram çalışmaz.
+
+**Uzman katmanı ve teşhis:**
+- **Sahne beyazı:** Otomatik (varsayılan) / Sabit (80–300 nit, varsayılan 203).
+- **Sahne sapma sınırı δ:** 0–1 stop (varsayılan 0,5).
+- **Teşhis kartında anlık değer:** "Sahne beyazı: 128 nit → ≈ 1140 nit (0,95 H) · kaynak: HDR10 histogram (P90) · çapa: 135 nit".
+  - Sağdaki nit değeri yalnızca Tepe Kilidi "panel tepesi" durumundayken ve panel tepesi spec değeri olan 1200 nit kabul edilerek, **≈** işaretiyle gösterilir.
+  - Diğer durumlarda yalnızca `H`'nin kesri gösterilir. Panelin nit değeri public API'den okunamıyor.
+- **Telemetri (CSV):** `W_f`, `Ŵ`, `A`, `L_ref`, `e` (DV trim), kesim olayları ve kaynak türü.
+
+**Başarı ölçütü (AS-38, §10.2):**
+- Diffuse beyazı 100–150 nite koyulmuş 5 HDR10 filmde Maksimum modunda tipik beyaz **≥ 0,9 H** olmalı. Ölçüm: gündüz ve diyalog sahnelerinin ≥ %90'ında, sahnenin P90 pikselinin çıkış değeri.
+- Parlak obje içeren sahnelerde **görünür pompalama olmamalı.**
 
 ### 3.6 Headroom: okuma, yumuşak uyum, Tepe Kilidi
 
@@ -424,7 +548,7 @@ paket → uzunluk önekli NAL taraması → NAL 62 (UNSPEC62) → dovi_parse_uns
 - **Fonksiyon adları:** `libdovi` C API'si incelendi. Fonksiyonlar ve mode 2 tanımı **[doğrulandı]** (`capi.rs`, README: "mode 2 – profile 8.1 compatible; removes mapping for P7 FEL"; "mode 5 – 8.1, preserving mapping").
 - **Maliyet:** Kare başına mikrosaniye mertebesinde **[ölçülmeli, AS-2: < 2 ms hedefi]**.
 - **MKV'de DV sinyali:** `BlockAdditionMapping` (`dvcC`/`dvvC`). FFmpeg bunu `AV_PKT_DATA_DOVI_CONF` olarak verir; `dvcC` bundan yeniden kurulur. Çift izli P7'de (BL ve EL ayrı izlerde) EL izi okunmaz.
-- **Nit'te DV DM:** Dolby'nin trim'leri (L2/L8) ve DM algoritması kullanılmaz. Bunların yerini Nit eğrisi alır. AS-30'un "parlaklık farkı hariç renk eşleşmesi" tanımı tam olarak budur. L1 (sahne ortalaması) v1.1'de `L_ref` uyarlamasına girer.
+- **Nit'te DV DM:** Dolby'nin DM algoritması kullanılmaz; yerini Nit eğrisi alır. AS-30'un "parlaklık farkı hariç renk eşleşmesi" tanımı tam olarak budur. **L1 (min/avg/max) ve L2/L8 trim'leri MVP'de yalnızca sahne bazlı `L_ref` için okunur** (§3.5.1, rev. 5). Trim'ler görüntüye doğrudan uygulanmaz.
 - **P5'te reshaping ölçeklemeden sonra yapılır (yaklaşık).** Reshaping doğrusal değildir; ölçeklemeden sonra uygulanması kaynak çözünürlüğündeki sonuçtan küçük farklar doğurabilir. AS-30'da CPU referansında iki sıra karşılaştırılır. Fark ΔE_ITP ≥ 1 çıkarsa 4K P5 için ayrı bir reshaping geçişi eklenir (+0,5–1 ms **[ölçülmeli]**).
 
 **Lisans:**
@@ -479,8 +603,8 @@ paket → uzunluk önekli NAL taraması → NAL 62 (UNSPEC62) → dovi_parse_uns
 
 | Senaryo | Geçiş A (N1) | Geçiş B (1–5 + altyazı + 6) | Toplam hedef | Not |
 |---|---|---|---|---|
-| 4K HEVC 10-bit HDR → 2000×1125 | Yalnızca dedektör: ≈ 0,2–0,3 ms | ≈ 1,5–2,5 ms (bant genişliği sınırlı: ≈ 25 MB okuma + 18 MB yazma) | **≤ 3,0 ms** (AS-29) | **[ölçülmeli]** |
-| 4K DV P5 | Dedektör | + reshaping ≈ 0,3–0,8 ms | ≤ 3,5 ms | AS-30 |
+| 4K HEVC 10-bit HDR → 2000×1125 | Dedektör ≈ 0,2–0,3 ms + **`L_ref` histogramı ≈ 0,1–0,3 ms** | ≈ 1,5–2,5 ms (bant genişliği sınırlı: ≈ 25 MB okuma + 18 MB yazma) | Geçiş B **≤ 3,0 ms** (AS-29); toplam ≤ 3,6 ms | **[ölçülmeli]** (AS-38) |
+| 4K DV P5 | Dedektör (L1 varsa histogram yok) | + reshaping ≈ 0,3–0,8 ms | ≤ 3,5 ms (L1 geçersizse histogramla ≤ 3,8 ms) | AS-30 |
 | 1080p 8-bit SDR (Blu-ray) → 2000×1125 | **≤ 1,5 ms** (AS-32) | ≤ 1,0 ms | ≤ 2,6 ms | — |
 | **Tavan (her durumda)** | | | **≤ 4,5 ms / kaynak karesi** | 01b bütçesi |
 
@@ -548,7 +672,7 @@ Bunlar uygulamanın aşamayacağı sınırlardır; HUD'da ve teşhis kartında a
 | **Otomatik parlaklık / True Tone** | SDR beyazı değişir; `H` ters yönde değişir | Mutlak nit sabit tutulur (§3.6) |
 | **Pil ve OLED aşınması** | Tüketim ve aşınma artar | Kullanıcının bilinçli tercihi; pil tahmini v1.1 (P6) |
 
-### 3.14 Ölçüm protokolü: AS-26–AS-31 ve AS-33
+### 3.14 Ölçüm protokolü: AS-26–AS-31, AS-33 ve AS-38
 
 **Araç kutusu.** Işıkölçer olmayabilir ve Mac yok, bu yüzden Instruments da yok. Ölçümler şu araçlarla yapılır.
 
@@ -573,6 +697,7 @@ Bunlar uygulamanın aşamayacağı sınırlardır; HUD'da ve teşhis kartında a
 | **AS-30** (DV renk) | (1) **Çevrimdışı (CI):** P5 ve P8.1 test karelerinde NitMath CPU referansı ile `ffmpeg -vf libplacebo` çıktısı karşılaştırılır; ΔE_ITP (BT.2124) hesaplanır. (2) **Cihazda:** Referans ile Nit "renk eşleme" ayıklama eğrisi (`x·203/100`, `H`'ye kırpılmış) yan yana; renk çubukları ve cilt tonları. | Çevrimdışı ortalama ΔE_ITP < 1, p99 < 3. Cihazda yeşil/mor kayma görülmez (kör). |
 | **AS-31** (senaryolar) | §3.12'deki tablonun her satırı için bir kontrol listesi: PiP elle/otomatik, AirPlay ses, yansıtma, dış ekran, kayıt başlat/bitir, Denetim Merkezi, gelen arama, kilit, Düşük Güç Modu, ısı. Gölge beslemenin güç maliyeti de ölçülür. | Her senaryoda tanımlı davranış, siyah kare yok, ses kesilmez. Gölge besleme ek pil tüketimi ≤ %2/saat; aşarsa otomatik PiP Nit modunda kapatılır. |
 | **AS-33** (çıkış zinciri bandı) | Shader'da sentetik ince rampa üretilir: `[0,18H; 0,22H]` aralığında 2048 adım, ayrıca karanlık rampa `[0; 0,02H]`. Titreşim açık ve kapalı. Ekrandan makro fotoğraf çekilir ve görsel karar verilir. Kompozitörün titreşim uygulayıp uygulamadığına bakılır. | Karar kaydı: "6. adım gerekli mi?", "b = 8 mi 10 mu?". |
+| **AS-38** (sahne bazlı `L_ref`) | (1) **Çevrimdışı (Linux CI):** 5 HDR10 filmden saniyede 1 kare çıkarılır. Her sahnenin diffuse beyazı elle işaretlenir (beyaz yüzey seçimi); bu "gerçek değer" setidir. `NitMath` tahmincisi (P90 + süzgeç + çapa) aynı karelerde koşturulur. (2) **Cihazda:** Telemetride `L_ref` ve sahne P90'ının çıkış değeri. 10 "parlak obje" klibinde (far, patlama, pencereye dönen kamera, beyaz çarşaf) kör izleme. (3) Kesim tespiti için 20 klip; kesimler elle işaretlenir. (4) DV: Aynı filmlerde L1 tabanlı ve histogram tabanlı `W_s` karşılaştırılır; `k` kalibre edilir. | Tahmin ile gerçek değer arasındaki medyan hata ≤ 0,3 stop. Maksimum modunda gündüz/diyalog sahnelerinin ≥ %90'ında tipik beyaz ≥ 0,9 `H`. Parlak obje kliplerinde sahne içi `L_ref` yükselmesi ≤ 0,2 stop ve kör izlemede ≥ 9/10 "pompalama yok". Gece sahnelerinde `L_ref ≥ A · 2^−0,5` (niyet korunur). Kesimlerin ≥ %95'i yakalanır; 10 dk'da ≤ 1 yanlış kesim; geçişler (fade) kesim sayılmaz. Histogram ≤ 0,3 ms, toplam M2 p95 ≤ 4,5 ms. Aynı film tekrar oynatılınca `L_ref` izi ±0,05 stop içinde kalır. |
 
 ---
 
@@ -637,7 +762,8 @@ Bunlar uygulamanın aşamayacağı sınırlardır; HUD'da ve teşhis kartında a
 |---|---|
 | Nit (MVP) | §3.5'teki kapalı form eğriler (SDR, Maksimum, Dengeli) |
 | Referans | Sistem: HDR10 statik, DV DM, HLG |
-| Nit v1.1 (V3) | Ekran çözünürlüğüne indirilmiş karede histogram, sahne kesimi tespiti, dinamik `L_ref` ve κ. AS-4: ≤ 4 ms ve pil etkisi ≤ %10. |
+| Nit MVP (rev. 5) | **Sahne bazlı `L_ref`:** DV L1 ya da HDR10 histogramı, sahne kesimi tespiti, film çapası (§3.5.1, AS-38) |
+| Nit v1.1 (V3) | **Tam dinamik ton eşleme:** κ ve `w`'nin sahneye göre uyarlanması, HDR10+ eğrisi, isteğe bağlı yerel kontrast. AS-4: ≤ 4 ms ve pil etkisi ≤ %10. |
 
 ### 4.7 Altyazı (M6)
 
@@ -1151,13 +1277,13 @@ Development ve büyük olasılıkla ad hoc imzalı uygulamalar için iPhone'da *
 
 | Modül | Sorumluluk | Bağımlılık | Linux'ta test? |
 |---|---|---|---|
-| `NitMath` | EOTF/OETF, matrisler, eğriler, DV reshaping'in **CPU referansı** (float64), Temiz Nit LUT üretimi | — | **Evet** |
+| `NitMath` | EOTF/OETF, matrisler, eğriler, DV reshaping'in **CPU referansı** (float64), Temiz Nit LUT üretimi, **sahne beyazı tahmincisi** (P90, kesim metriği, süzgeç, çapa; histogram girdili saf fonksiyonlar) | — | **Evet** |
 | `DSPKit` (C99 + Swift) | Biquad, gecikme hattı, K-ağırlık, kompresör, TP limiter, sert kırpma, STFT/merkez çıkarma (F1), `ParamSet`/atomik takas, ölçüm halkası | — | **Evet** |
 | `DoviKit` | libdovi sarmalayıcısı; RPU ayrıştırma ve dönüştürme; `DoviFrameParams` | libdovi | Kısmen |
 | `MediaIO` | Kaynak soyutlaması (dosya, SMB, HTTP) ve özel `AVIOContext` | libsmb2 | Kısmen |
 | `Demux` | libavformat / libbluray / libudfread; paket kuyruğu; GOP tutucu | FFmpeg, libbluray | Hayır |
 | `VideoDecode` | VT oturumları, yazılım çözücü adaptörleri, PTS sıralaması | Demux | Hayır |
-| `NitCore` | Metal hattı (Geçiş A ve B), headroom denetleyicisi, Tepe Kilidi, kare zamanlayıcısı | NitMath, VideoDecode | Simülatör |
+| `NitCore` | Metal hattı (Geçiş A ve B), **histogram çekirdeği ve paylaşılan sahne kesimi sinyali**, headroom denetleyicisi, Tepe Kilidi, kare zamanlayıcısı | NitMath, VideoDecode, DoviKit (L1/L2/L8) | Simülatör |
 | `ReferencePath` | `AVSampleBufferDisplayLayer` besleme, PiP, dış ekran | Demux | Hayır |
 | `AudioCore` | Ses çözme, iki evreli zincir, `Receiver` besleme, rota izleme, bit-perfect | DSPKit, FFmpeg | Kısmen |
 | `DialogKit` | M9: AUSoundIsolation sunucusu, F1/F2, Sound Analysis gevşetmesi | DSPKit | Hayır |
@@ -1200,7 +1326,7 @@ graph TD
 
 | Katman | Ne test edilir? | Nerede? |
 |---|---|---|
-| Birim | `NitMath`: EOTF ve OETF gidiş-dönüşü, eğrinin monotonluğu ve C¹ sürekliliği, `f(1) = w`, matrislerin satır toplamları. `DSPKit`: biquad yanıtı, limiter'ın TP tavanı, sert kırpma sayacı, gecikme hizalaması, `ParamSet` takasında yarış testleri. | Linux CI |
+| Birim | `NitMath`: EOTF ve OETF gidiş-dönüşü, eğrinin monotonluğu ve C¹ sürekliliği, `f(1) = w`, matrislerin satır toplamları. Sahne beyazı tahmincisi: belirlenimcilik, sınırlar (80–300, ±δ, +0,2 stop), kayıtlı histogram dizileri üzerinde kesim tespiti, her `L_ref` için P-2. `DSPKit`: biquad yanıtı, limiter'ın TP tavanı, sert kırpma sayacı, gecikme hizalaması, `ParamSet` takasında yarış testleri. | Linux CI |
 | Referans karşılaştırma | P5/P8.1 kareleri: `NitMath` ile libplacebo arasında ΔE_ITP (AS-30). RPU dönüşümü: `DoviKit` ile `dovi_tool` CLI çıktısının bayt eşitliği. | Linux CI |
 | Shader golden | Metal çıktısı ile `NitMath` CPU referansı karşılaştırılır; tolerans ≤ 0,25 LSB (10-bit PQ eşdeğeri). Simülatörün Metal'i ana makine GPU'sunda çalışır. | macOS CI (etiketle) |
 | Entegrasyon | Demux → çözme → PTS sırası; mod geçişinde siyah kare olmaması (görüntü yakalama); ses evrelerinin yeniden işlemede örnek sürekliliği | Simülatör ve cihaz |
@@ -1251,7 +1377,7 @@ graph TD
   - `AVAssetReader` (sıkıştırılmış) → `VTDecompressionSession` (`x420`/`420v`) → Metal Geçiş B (adım 1–5 ve 6). Temiz Nit (Geçiş A) S1'de eklenir. Ölçekleme tek geçişte, bicubic.
   - Ses: AAC sıkıştırılmış olarak `AVSampleBufferAudioRenderer`'a; synchronizer ana saat.
   - Headroom denetleyicisi ve Tepe Kilidi (§3.6). Kare zamanlayıcısı (§3.8). Referans geçişi (§3.11).
-- **Kapsam dışı:** MKV/FFmpeg, DV, altyazı, PiP, SMB, M9 ve M10.
+- **Kapsam dışı:** MKV/FFmpeg, DV, altyazı, PiP, SMB, M9 ve M10. S0'da HDR'da `L_ref` sabit 203 nittir. Sahne bazlı tespit hemen ardından S0b'de eklenir.
 
 **Başarı ölçütleri:**
 
@@ -1280,14 +1406,21 @@ graph TD
 
 **İlk iki haftanın dağılımı:**
 - **Hafta 1:** S0.
-- **Hafta 2:** S1 ve ses spike'ları (S4, S5) paralel yürür. Ses spike'ları ayrı bir test hedefinde, görüntüden bağımsız çalışır.
+- **Hafta 2:** Önce **S0b (AS-38, sahne bazlı `L_ref`)**, ardından S1 (Temiz Nit; 3. haftaya taşar). Ses spike'ları (S4, S5) paralel yürür. Ses spike'ları ayrı bir test hedefinde, görüntüden bağımsız çalışır.
 - `deps.yml` 1. haftada arka planda başlatılır. FFmpeg ve libdovi hazır olunca S2 başlar.
+
+**AS-38 neden S0'ın içinde değil de hemen arkasında (S0b)?**
+- S0 bir "git / gitme" deneyi: panel ve sistem tepeyi gerçekten veriyor mu? Kapsamı zaten 6–8 gün. `L_ref`'i içine almak bu kritik sorunun cevabını geciktirir.
+- AS-38, S0'ın hattı ve telemetrisi üzerine kurulur. Ek olarak 5 gerçek HDR10 film ve çevrimdışı bir "gerçek değer" seti gerektirir. Filmler MKV'den MP4'e kopyalanarak (`-c copy`) FFmpeg'e bağımlı olmadan `AVAssetReader` ile okunabilir.
+- Temiz Nit'ten (S1) önce gelir, çünkü HDR10 içerikte 1 numaralı vaadi (beyaz ≥ 0,9 `H`) doğrudan belirler. Temiz Nit ise ağırlıkla 8-bit SDR'ı etkiler.
+- AS-38'in DV kısmı (L1, L2/L8, `k` kalibrasyonu) libdovi gerektirdiği için S2'ye katlanır.
 
 | Sıra | Spike | Kapsadığı sorular | Başarı ölçütü (özet) | Süre | Zaman |
 |---|---|---|---|---|---|
 | **S0** | **Nit Çekirdeği prototipi** | AS-26, AS-29, AS-33, AS-28 (erken), AS-5 (bir kısmı) | §10.1 | 6–8 g | **Hafta 1** |
-| **S1** | **Temiz Nit** | **AS-32** | CAMBI (çıkış PQ 10-bit'e kodlanmış) ≥ %50 düşer. Doku bölgelerinde yüksek frekans enerjisi kaybı ≤ %2. 1080p'de ≤ 1,5 ms. 2 saatte 0 kare kaybı. Kör A/B'de ≥ 8/10 tercih. | 4–5 g | Hafta 2 |
-| S2 | DV: Referans tetikleme, P7→P8.1, P5 renk | AS-1, AS-2, AS-30 | MKV'den P8.1 ve dönüştürülmüş P7 Referans'ta DV tetikler (MP4/AVPlayer ile yan yana aynı). RPU dönüşümü < 2 ms/kare. ΔE_ITP ortalaması < 1 (çevrimdışı), cihazda yeşil/mor yok. | 4–5 g | Hafta 2–3 |
+| **S0b** | **Sahne bazlı `L_ref` (HDR10/HLG)** | **AS-38** | Tahmin ile gerçek değer arasında medyan hata ≤ 0,3 stop. Diffuse beyazı 100–150 nit olan 5 HDR10 filmde Maksimum modunda tipik beyaz ≥ 0,9 `H`. Parlak obje kliplerinde pompalama yok (≥ 9/10). Kesimlerin ≥ %95'i yakalanır. Toplam M2 ≤ 4,5 ms (§3.14). | 3–4 g | **Hafta 2 (ilk iş)** |
+| **S1** | **Temiz Nit** | **AS-32** | CAMBI (çıkış PQ 10-bit'e kodlanmış) ≥ %50 düşer. Doku bölgelerinde yüksek frekans enerjisi kaybı ≤ %2. 1080p'de ≤ 1,5 ms. 2 saatte 0 kare kaybı. Kör A/B'de ≥ 8/10 tercih. | 4–5 g | Hafta 2–3 |
+| S2 | DV: Referans tetikleme, P7→P8.1, P5 renk; **AS-38'in DV kısmı** (L1/L2/L8, `k`) | AS-1, AS-2, AS-30, AS-38 (DV) | MKV'den P8.1 ve dönüştürülmüş P7 Referans'ta DV tetikler (MP4/AVPlayer ile yan yana aynı). RPU dönüşümü < 2 ms/kare. ΔE_ITP ortalaması < 1 (çevrimdışı), cihazda yeşil/mor yok. | 4–5 g | Hafta 2–3 |
 | S4 | M9 diyalog | AS-12 (+ AS-15) | AU'nun kabul ettiği biçim, gecikmesi ve hesap birimi raporlanır. Gerçek zamanlı ≤ %20 P çekirdeği. 10 fısıltı sahnesinde kör testte anlaşılırlık artar. Müzikte gevşeme çalışır. Arka planda F1'e geçiş tıklamasızdır. A/V kayması 0. | 3–4 g | Hafta 2 |
 | **S5** | **M10 boost ve limiter** | **AS-37** | §10.3 | 2–3 g | Hafta 2 |
 | S3 | Native Atmos ve TrueHD | AS-9, AS-10 | AirPods'ta Atmos göstergesi yanar. TrueHD < %15 P çekirdeği. Kanal test dosyası doğru yerleşir. | 3 g | Hafta 3 |
@@ -1360,6 +1493,8 @@ AS-34, MVP sırasında paralel sonuçlanırsa yalnızca kontur katmanı MVP sonu
 | K-24 | Dağıtım hedefi | iOS 26; iOS 27 | **iOS 27.0.** Tek hedef cihaz var; `Receiver`, Now Playing ve `UISceneAccessory` doğrudan kullanılabilir. |
 | K-25 | Temiz Nit'in yeri | Ayrı mod; M2'nin parçası | **M2'nin parçası.** Ölçeklemeden önce ve kod değerleri alanında çalışır. Adım 6 AS-33'e bağlı. Toplam ≤ 4,5 ms (01b, kullanıcı kararı). |
 | K-26 | Boost hatırlama | Genel; içerik bazında; rota bazında | **Rota sınıfı başına + isteğe bağlı içerik geçersiz kılma.** Hoparlördeki yüksek boost kulaklığa taşınmaz (güvenlik). |
+| K-27 | HDR referans beyazı (`L_ref`) (rev. 5) | (a) Sabit 203 nit; (b) L1 ortalaması / Reinhard anahtarı; (c) histogram tepesi / P99; (d) histogram ortalaması; (e) DV'de L1 (+ L2/L8 düzeltmesi), HDR10'da P90 histogramı, film çapası ±0,5 stop, 80–300 nit, asimetrik süzgeç | **(e).** (a) diffuse beyazı 100–150 nit olan filmlerde beyazı 640–980 nitte bırakıyor. (b) ve (d) kompozisyona bağlı: gece sahnelerini aydınlatıp niyeti bozuyor. (c) diffuse beyazı değil vurguyu ölçüyor. (e)'de DV L1 çekim boyunca sabit olduğundan pompalama yapamaz. P90 vurgulara karşı dayanıklı; çapa ve sınırlar sanatsal niyeti ve pompalamayı koruyor. Kaynaktan hesaplandığı için `H` ile geri besleme kurulmaz. Tam dinamik ton eşleme (κ, `w`) v1.1'de. |
+| K-28 | AS-38'in spike içindeki yeri | S0'ın içinde; S0'dan hemen sonra ayrı spike; S1'den sonra | **S0'dan hemen sonra ayrı spike (S0b); DV kısmı S2'de.** S0'ın git/gitme kararını geciktirmez. HDR10'da 1 numaralı vaadi doğrudan belirlediği için Temiz Nit'ten önce gelir. |
 
 ---
 
@@ -1378,6 +1513,7 @@ AS-34, MVP sırasında paralel sonuçlanırsa yalnızca kontur katmanı MVP sonu
 | R9 | PiP gölge beslemesinin güç maliyeti | Orta | Düşük | Nit modunda otomatik PiP'i kapatmak | AS-31 |
 | R10 | Boost'un kulaklık güvenliğiyle beklenenden az etkili olması | Orta | Düşük | Şeffaf bilgi çipi; sistem sınırı aşılmaz | AS-37 |
 | R11 | iOS 27 API davranışlarının belgeyle uyuşmaması (`Receiver`, Now Playing) | Düşük–orta | Orta | Eski API yedekleri (iOS 17 `sampleBufferRenderer`) | S0, S8 |
+| R12 | Sahne beyazı tahmin hatası. Gökyüzü ya da kar ağırlıklı sahnelerde beyaz düşük kalabilir; kasıtlı karanlık sahneler fazla aydınlanabilir; sahne içinde pompalama görülebilir. | Orta | Orta–yüksek (HDR'da 1 numaralı vaat ve sanatsal niyet) | Film çapası ±0,5 stop; 80–300 nit sınırı; sahne içinde +0,2 stop yükselme tavanı ve 8 s zaman sabiti; DV'de çekim başına sabit L1; başlık bazında çapa önbelleği; uzmanda Sabit kipi | S0b / AS-38 |
 
 ---
 
