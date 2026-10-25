@@ -9,6 +9,10 @@
 >
 > **Rev. 3 (kullanıcı kararı):** AI diyalog netleştirme MVP'ye ayrı bir madde olarak eklendi (M9). MVP 9 özellik oldu.
 >
+> **Rev. 4 (kullanıcı kararı):**
+> - `01b-ek-fikirler.md` onaylandı. **N1 Temiz Nit**, M2'nin ayrılmaz parçası olarak MVP'de. **N2 Ses Çekirdeği** v1.1'in ilk işi.
+> - **M10 ses yükseltme (boost)** MVP'ye eklendi. En fazla %50; %150, yaklaşık +6 dB demek. MVP 10 özellik oldu.
+>
 > **İşaretler:** **[doğrulandı]** = Apple dokümantasyonu, WWDC oturumu ya da iOS 27 sürüm notlarıyla teyit edildi. **[doğrulanmalı]** = ikincil kaynak, forum raporu ya da çıkarım. Ajan 2 bunları spike ile teyit etmeli.
 >
 > **Puanlar:** **W** = wow etkisi (1–5). **F** = A13 + iOS 27 üzerinde fizibilite (1–5). 5, bilinen API ile kesin yapılabilir demek; 1, pratikte imkânsız demek.
@@ -18,9 +22,9 @@
 ## 0. Yönetici özeti
 
 - **Vizyon:** Kendi diskinden aldığın film ve müzik, iPhone 11 Pro'nun verebileceği en sadık görüntü ve sesle oynar. Tek dokunuş yeter, ayar gerekmez, tüm AI cihazda çalışır.
-- **MVP (9 özellik):**
+- **MVP (10 özellik):**
   1. Evrensel oynatma çekirdeği (MKV/ISO/BDMV)
-  2. **Nit Çekirdeği: SDR ve HDR'da tipik beyaz yaklaşık 1200 nit (en öncelikli)**
+  2. **Nit Çekirdeği: SDR ve HDR'da tipik beyaz yaklaşık 1200 nit (en öncelikli).** 8-bit kaynakta bant gidermek için Temiz Nit dahil.
   3. HDR ve Dolby Vision çözme (P7'nin P8.1'e dönüştürülmesi dahil). Nit Çekirdeğini besler; ayrıca "Referans" modu var.
   4. Rotayı tanıyan sinema sesi (native Atmos, 7.1'in uzamsal sese aktarılması, diyalog/gece modu)
   5. Audiophile müzik (bit-perfect DAC, gapless, loudness)
@@ -28,6 +32,7 @@
   7. Kaynaklar ve kütüphane (SMB, Jellyfin, Plex)
   8. Sıfır ayar deneyimi
   9. AI diyalog netleştirme (stereoda AUSoundIsolation, çok kanallıda merkez kanal)
+  10. Ses yükseltme (boost): %100–%150, en fazla yaklaşık +6 dB, kırpma olmadan
 - **iOS 27 araştırmasından çıkan üç kritik ders:**
   1. iOS 27 iPhone 11 Pro'yu destekliyor. Ancak A13 "temel katmanda": Apple Intelligence yok, Metal 4 yok, SpeechTranscriber muhtemelen yok.
   2. iOS 27 ile gelen yeni ML API'lerinin (Core AI, Music Understanding, VTFrameProcessor) A13'te nasıl çalıştığı belgelenmemiş. Bu yüzden MVP bunlara **bağımlı olmamalı**. Bu API'ler "varsa kullan" katmanında durur.
@@ -258,12 +263,12 @@ Rev. 2: V12 (Nit Çekirdeği, W×F = 20) kullanıcı kararıyla 1 numaralı öze
 
 ## 5. MVP seçimi
 
-### 5.1 MVP: çekirdek deneyim (9 özellik)
+### 5.1 MVP: çekirdek deneyim (10 özellik)
 
 | # | MVP özelliği | Kapsam (dahil) | Kapsam dışı | Fikir ID'leri | Kullanıcı açısından başarı ölçütü |
 |---|---|---|---|---|---|
 | M1 | **Evrensel oynatma çekirdeği** | MKV, MP4, M2TS, ISO ve BDMV (ana film tespiti). HEVC ve H.264 donanımla; AV1 (≤1080p), VC-1 ve MPEG-2 yazılımla çözülür. 3:2 kadans, temel deinterlace, PiP ve arka planda ses. | Menüler, 3D/MVC | V1, S3, V8 (yalnızca kadans), V11 | Kendi UHD remux arşivinin %95'i ilk denemede ve takılmadan oynar. |
-| M2 | **Nit Çekirdeği: tipik beyaz yaklaşık 1200 nit (EN ÖNCELİKLİ)** | Aşağıdaki "M2 ayrıntısı" bölümüne bakın. SDR ve HDR'da beyaz panelin tepe parlaklığına çıkar. Varsayılan mod "Nit"; isteyene "Referans" modu (Apple'ın native HDR/DV yolu, disk neyse o) sunulur. Kontroller SDR'da kalır, gözü almaz. | Parlaklık ve beyaz noktanın kullanıcı tarafından değiştirilmesi (sistem ayarı) | V12, V5, P1 | Aynı SDR film, Apple TV uygulamasındaki SDR'dan belirgin şekilde parlak görünür. Beyaz yamada ölçülen değer panel tepe değerine yakındır. 2 saatte kare kaybı 0. |
+| M2 | **Nit Çekirdeği: tipik beyaz yaklaşık 1200 nit (EN ÖNCELİKLİ)** | Aşağıdaki "M2 ayrıntısı" bölümüne bakın. SDR ve HDR'da beyaz panelin tepe parlaklığına çıkar. Varsayılan mod "Nit"; isteyene "Referans" modu (Apple'ın native HDR/DV yolu, disk neyse o) sunulur. Kontroller SDR'da kalır, gözü almaz. **Temiz Nit (N1, rev. 4)** bu hattın parçasıdır: 8-bit kaynakta, yalnızca nihai parlaklıkta görünür olacak bantlar giderilir (bkz. `01b-ek-fikirler.md` §2). | Parlaklık ve beyaz noktanın kullanıcı tarafından değiştirilmesi (sistem ayarı) | V12, V5, P1, N1 | Aynı SDR film, Apple TV uygulamasındaki SDR'dan belirgin şekilde parlak görünür. Beyaz yamada ölçülen değer panel tepe değerine yakındır. 2 saatte kare kaybı 0. |
 | M3 | **HDR ve Dolby Vision çözme** | HDR10, HLG ve DV P5/P8 çözülür ve Nit Çekirdeğine verilir. DV P7 → P8.1 dönüşümü yapılır. Referans modunda native EDR/DV yolu kullanılır. HDR rozeti ve teşhis kartı. | HDR10+ (v1.1) | V1, V2, V5, S2 | P5, P7 ve P8 test dosyaları iki modda da doğru renkle oynar. Referans modunda DV tetiklenir. |
 | M4 | **Rotaya göre sinema sesi** | E-AC-3 JOC'un native Atmos'a verilmesi. TrueHD ve DTS-HD MA'nın 7.1'e açılıp uzamsal sese aktarılması. Gece modu. Bluetooth gecikme telafisi. Diyalog netleştirme M9'da. | — | A1, A3, A4 | AirPods'ta Atmos/uzamsal göstergesi yanar. |
 | M5 | **Audiophile müzik** | FLAC, ALAC, WAV ve AIFF gapless. Bit-perfect DAC ve örnekleme hızı geçişi, sinyal yolu görünümü. R128/ReplayGain loudness. Temel albüm modu. | DSD, müzikal geçişler | A2, A7, L3 | DAC ekranı dosyanın örnekleme hızını gösterir. Albümler kesintisiz çalar. |
@@ -271,6 +276,7 @@ Rev. 2: V12 (Nit Çekirdeği, W×F = 20) kullanıcı kararıyla 1 numaralı öze
 | M7 | **Kaynaklar ve kütüphane** | Files/yerel, SMB, Jellyfin ve Plex. Bonjour ile keşif. TMDB meta verisi. Kalite rozetleri ve kalite rafı. | DLNA (multicast onayına bağlı), Trakt (v1.1) | S4, L1, L2 | Yeni bir NAS üç dokunuşta kütüphaneye eklenir. |
 | M8 | **Sıfır ayar deneyimi** | Akıllı parça seçimi. Kaldığın yerden devam ve iCloud senkronu. OLED arayüzü ve yanma koruması (yalnızca arayüz öğeleri; parlaklık düşürülmez). Oynatma sırasında otomatik kilit kapalı. Now Playing framework. Isıyı gözeten kalite yöneticisi. Katmanlı (basit/uzman) arayüz. | — | S1, S5, S6, S7, P1, P2, V6 | İlk açılışta hiçbir ayara dokunmadan "doğru" oynatma. |
 | M9 | **AI diyalog netleştirme** (rev. 3, kullanıcı kararı) | **Stereo ve 2.0 içerik:** AUSoundIsolation (cihaz içi ML ses izolasyonu) ayrılmış sesi üretir. Bu ses orijinalin üzerine ayarlanabilir oranda geri karıştırılır; yani müzik ve efekt silinmez, yalnızca konuşma öne çıkar. **Çok kanallı içerik (5.1/7.1):** Merkez kanal yükseltilir. İsteğe bağlı olarak merkez kanala da izolasyon uygulanıp efekt sızıntısı bastırılır. Tek bir "Diyalog" düğmesi ve 3 kademe vardır. Görüntüyle senkron korunur (gecikme telafisi). | Konuşmanın metne çevrilmesi (I2, v2) | A5 | Seçilmiş 10 "fısıltı sahnesinde" diyalog belirgin şekilde anlaşılır hale gelir. Müzik ve efekt kaybı duyulmaz. Ses ile görüntü arasında kayma 0. CPU/ANE bütçesi AS-12'ye uyar. |
+| M10 | **Ses yükseltme (boost)** (rev. 4, kullanıcı kararı: "mutlaka") | %100–%150 arası bir kaydırıcı. %150, yaklaşık +6 dB dijital kazanç demek; bu algısal olarak yaklaşık %50 daha yüksek ses. **Üst sınır kesin.** Kazanç PCM zincirinin sonunda, true-peak limiter'dan önce uygulanır. Bu sayede kırpma ve çatlama olmaz; sessiz kayıtlar gerçekten yükselir. Hoparlör, kulaklık ve BT'de çalışır. Native Atmos ve bit-perfect DAC yollarındaki davranışı ajan 2 belirler (ör. Atmos'ta boost açılınca PCM'e çözme, DAC'ta "bit-perfect değil" göstergesi). | +6 dB üstü | — | Sessiz bir filmde boost %150'de ses belirgin şekilde yükselir. Yüksek kayıtlı bir müzikte de 0 kırpma olur ve duyulabilir pompalama olmaz (AS-37). |
 
 ### 5.1.1 M2 ayrıntısı: Nit Çekirdeği
 
@@ -314,6 +320,7 @@ VideoToolbox (HEVC/H.264 donanım çözme) ─► CVPixelBuffer (10/8-bit YCbCr)
 ### 5.2 Yol haritası
 
 **v1.1: Derinlik** (MVP'den sonra)
+- **N2 Ses Çekirdeği (ilk iş, rev. 4):** Dinleme seviyesine göre ton düzeltmesi ve isteğe bağlı odyogram katmanı (bkz. `01b-ek-fikirler.md` §3).
 - V3 Ekrana göre dinamik ton eşleme · V4 HDR10+
 - A6 Kulaklık EQ'su ve crossfeed · A10 Taptic subwoofer
 - I4 İntro ve jenerik atlama · I6 Akıllı kapak · A11 Sahte hi-res dedektörü

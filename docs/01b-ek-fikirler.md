@@ -1,6 +1,6 @@
 # 01b — Ek Fikirler: İki Yeni Özellik
 
-> **Aşama:** 1 (ek) · **Ajan:** `fikir-ajani` · **Tarih:** 25 Ekim 2026 · **Girdi:** `docs/00-brief.md`, `docs/01-konsept.md` (rev. 3) · **Durum:** kullanıcı onayı bekliyor
+> **Aşama:** 1 (ek) · **Ajan:** `fikir-ajani` · **Tarih:** 25 Ekim 2026 · **Girdi:** `docs/00-brief.md`, `docs/01-konsept.md` (rev. 3) · **Durum:** **onaylandı (rev. 4):** N1 → MVP (M2'nin parçası), N2 → v1.1'in ilk işi
 >
 > Bu belge `01-konsept.md`'yi değiştirmez; yalnızca ona eklenecek iki fikri önerir. Spike numaraları AS-32'den başlar.
 >
