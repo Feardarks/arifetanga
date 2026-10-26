@@ -76,6 +76,13 @@ final class LabEngine: NSObject {
     private var lastParamEvent: CFTimeInterval = 0
     private var referencePatchDirty = true
 
+    // Sahne bazlı referans beyaz (S0b, 02-cozum §3.5.1).
+    private var sceneWhite = SceneWhiteEstimator()
+    private var maxCLL: Double?
+    private var anchorKey: String?
+    private var lastAnchorSave: CFTimeInterval = 0
+    private static let anchorPrefix = "nitLab.anchor."
+
     override init() {
         renderer = NitRenderer()
         rendererAvailable = renderer != nil
@@ -112,6 +119,7 @@ final class LabEngine: NSObject {
         displayLink?.invalidate()
         displayLink = nil
         player.pause()
+        saveAnchor()
         UIApplication.shared.isIdleTimerDisabled = false
         // Kullanıcı arada değiştirmediyse parlaklığı giriş değerine döndür (02-cozum §3.6).
         if let screen, let initial = initialBrightness, let set = appSetBrightness,
@@ -126,6 +134,7 @@ final class LabEngine: NSObject {
 
     func load(url: URL) {
         endTest()
+        saveAnchor()
         releaseAccess()
         if url.startAccessingSecurityScopedResource() { accessedURL = url }
         resetFrameState()
@@ -142,8 +151,11 @@ final class LabEngine: NSObject {
                     self?.fail("Dosyada video izi yok")
                     return
                 }
-                let (fps, characteristics) = try await track.load(.nominalFrameRate, .mediaCharacteristics)
-                self?.attach(asset: asset, hdr: characteristics.contains(.containsHDRVideo), fps: Double(fps))
+                let (fps, characteristics, descriptions) = try await track.load(.nominalFrameRate, .mediaCharacteristics,
+                                                                                .formatDescriptions)
+                let light = descriptions.first.flatMap(Self.contentLightLevel)
+                self?.attach(asset: asset, hdr: characteristics.contains(.containsHDRVideo), fps: Double(fps),
+                             title: url.lastPathComponent, maxCLL: light?.maxCLL, maxFALL: light?.maxFALL)
             } catch {
                 self?.fail("Dosya açılamadı: \(error.localizedDescription)")
             }
@@ -176,6 +188,7 @@ final class LabEngine: NSObject {
 
     func seek(to seconds: Double) {
         lastDisplayPTS = nil
+        sceneWhite.markCut()
         player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
     }
 
@@ -248,8 +261,19 @@ final class LabEngine: NSObject {
 
     private var screen: UIScreen? { surface.window?.windowScene?.screen }
 
-    private func attach(asset: AVURLAsset, hdr: Bool, fps: Double) {
+    private func attach(asset: AVURLAsset, hdr: Bool, fps: Double, title: String, maxCLL: Double?, maxFALL: Double?) {
         hdrHint = hdr
+        // Film çapası: ikinci izlemede önbellekten, yoksa MaxFALL'dan (02-cozum §3.5.1).
+        self.maxCLL = maxCLL
+        anchorKey = Self.anchorPrefix + title
+        let cached = UserDefaults.standard.double(forKey: Self.anchorPrefix + title)
+        let initialAnchor = cached > 0 ? cached : SceneWhiteEstimator.initialAnchor(maxFALL: maxFALL)
+        sceneWhite = SceneWhiteEstimator(config: sceneWhiteConfig, initialAnchor: initialAnchor)
+        lastAnchorSave = CACurrentMediaTime()
+        if hdr {
+            event("Sahne beyazı: başlangıç çapası \(TR.num(initialAnchor, 0)) nit (\(cached > 0 ? "önbellek" : maxFALL != nil ? "MaxFALL" : "varsayılan"))"
+                  + (maxCLL.map { " · MaxCLL \(TR.num($0, 0))" } ?? ""))
+        }
         frameDuration = fps > 0 ? 1 / fps : 1.0 / 24
         let pixelFormat = hdr ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
         let output = AVPlayerItemVideoOutput(outputSettings: [
@@ -273,8 +297,10 @@ final class LabEngine: NSObject {
     }
 
     private func handleEnd() {
+        saveAnchor()
         guard loop else { return }
         lastDisplayPTS = nil
+        sceneWhite.markCut()
         player.seek(to: .zero)
         player.play()
         event("Döngü başa sardı")
@@ -305,6 +331,7 @@ final class LabEngine: NSObject {
     }
 
     private func paramsChanged(from old: NitParams) {
+        sceneWhite.config = sceneWhiteConfig
         filter.tauUp = params.tauUpMs / 1000
         filter.deadband = params.deadbandPercent / 100
         peakLock.config = params.peakLockConfig
@@ -375,6 +402,7 @@ final class LabEngine: NSObject {
         }
 
         // Yeni video karesi.
+        var newFramePTS: Double?
         if case .file = source, let output {
             let itemTime = output.itemTime(forHostTime: link.targetTimestamp)
             if output.hasNewPixelBuffer(forItemTime: itemTime) {
@@ -388,6 +416,7 @@ final class LabEngine: NSObject {
                         }
                     }
                     lastDisplayPTS = pts
+                    newFramePTS = pts
                     if ticksSinceFrame > 0 {
                         cadenceRing.append(ticksSinceFrame)
                         if cadenceRing.count > 12 { cadenceRing.removeFirst(cadenceRing.count - 12) }
@@ -407,6 +436,15 @@ final class LabEngine: NSObject {
             if player.timeControlStatus == .playing { ticksSinceFrame += 1 }
         }
 
+        // Sahne beyazı: önceki karelerin histogramları (bir karelik gecikme önemsiz; §3.5.1).
+        if let result = renderer?.histograms.take() {
+            updateSceneWhite(bins: result.bins, pts: result.pts)
+        }
+        if now - lastAnchorSave > 300 {
+            lastAnchorSave = now
+            saveAnchor()
+        }
+
         // Headroom değişince statik kare de yeniden çizilir: düşüşte her zaman, yükselişte ≥ %1.
         if hEff < lastRenderedHeadroom - 1e-4 || abs(hEff - lastRenderedHeadroom) / max(lastRenderedHeadroom, 1) >= 0.01 {
             needsRender = true
@@ -419,9 +457,11 @@ final class LabEngine: NSObject {
                 if params.mode == .nit {
                     var pattern: PatternSpec?
                     if case .pattern(let p) = source { pattern = p }
+                    // Histogram yalnızca yeni HDR karelerinde; L_ref kipinden bağımsız (teşhis için de gerekir).
+                    let wantsHistogram = pattern == nil && (currentFormat?.transfer.isHDR ?? false)
                     snapshot.outputMax = renderer.render(layer: surface.metalLayer, pixelBuffer: currentBuffer, format: currentFormat,
-                                                         pattern: pattern, settings: params.renderSettings, headroom: hEff,
-                                                         presentAt: presentAt)
+                                                         pattern: pattern, settings: renderSettings(pattern: pattern), headroom: hEff,
+                                                         presentAt: presentAt, histogramPTS: wantsHistogram ? newFramePTS : nil)
                 } else {
                     snapshot.outputMax = 0
                 }
@@ -431,7 +471,7 @@ final class LabEngine: NSObject {
                     let spec = PatternSpec(kind: .sdrWindow, windowFraction: trial.windowFraction, levelNits: trial.levelNits,
                                            centerX: nitCenter)
                     snapshot.outputMax = renderer.render(layer: surface.metalLayer, pixelBuffer: nil, format: nil, pattern: spec,
-                                                         settings: params.renderSettings, headroom: hEff, presentAt: presentAt)
+                                                         settings: renderSettings(pattern: spec), headroom: hEff, presentAt: presentAt)
                     if referencePatchDirty {
                         renderer.renderReferencePatch(layer: surface.referencePatchLayer, windowFraction: trial.windowFraction,
                                                       centerX: 1 - nitCenter, nits: trial.levelNits)
@@ -441,7 +481,7 @@ final class LabEngine: NSObject {
             case .tonality:
                 // Sağ yarı: Nit yolu, H = 1'e zorlanmış; sol yarıdaki Apple SDR video işleyişiyle aynı beyazda.
                 snapshot.outputMax = renderer.render(layer: surface.metalLayer, pixelBuffer: currentBuffer, format: currentFormat,
-                                                     pattern: nil, settings: params.renderSettings, headroom: 1,
+                                                     pattern: nil, settings: renderSettings(pattern: nil), headroom: 1,
                                                      presentAt: presentAt)
             }
             lastRenderedHeadroom = hEff
@@ -479,8 +519,89 @@ final class LabEngine: NSObject {
             snapshot.duration = duration.isFinite ? duration : 0
             snapshot.playing = player.timeControlStatus == .playing
             snapshot.recordingSeconds = telemetry.elapsed
+            fillSceneWhiteSnapshot()
             onSnapshot?(snapshot)
         }
+    }
+
+    // MARK: Sahne beyazı
+
+    private var sceneWhiteConfig: SceneWhiteEstimator.Config {
+        var c = SceneWhiteEstimator.Config()
+        c.deviationStops = params.sceneDeviationStops
+        c.cutThreshold = params.cutThreshold
+        return c
+    }
+
+    /// Kullanılacak L_ref ve kaynağı. Desenlerde sahne tahmini kullanılmaz (ölçümü bozmasın).
+    private func resolvedReferenceWhite(pattern: PatternSpec?) -> (nits: Double, source: String) {
+        switch params.referenceWhiteMode {
+        case .fixed:
+            return (NitTone.defaultReferenceWhiteNits, "sabit 203")
+        case .manual:
+            return (params.referenceWhiteNits, "elle")
+        case .scene:
+            if pattern != nil { return (NitTone.defaultReferenceWhiteNits, "desen: sabit 203") }
+            let state = sceneWhite.state
+            return (state.referenceWhite, state.sceneCount > 0 ? "histogram P90" : "çapa (histogram bekleniyor)")
+        }
+    }
+
+    private func renderSettings(pattern: PatternSpec?) -> RenderSettings {
+        var settings = params.renderSettings
+        settings.referenceWhiteNits = resolvedReferenceWhite(pattern: pattern).nits
+        return settings
+    }
+
+    private func updateSceneWhite(bins: [UInt32], pts: Double) {
+        let before = sceneWhite.state.referenceWhite
+        sceneWhite.update(histogram: bins, time: pts, maxCLL: maxCLL)
+        let state = sceneWhite.state
+        if state.cut {
+            event("Sahne kesimi · d \(TR.num(state.cutDistance, 3)) · kare beyazı \(state.frameWhite.map { TR.num($0, 0) } ?? "—") nit")
+        }
+        // Statik karede L_ref değişirse yeniden çiz (yalnızca sahne kipinde etkili).
+        if params.referenceWhiteMode == .scene, abs(state.referenceWhite - before) / before >= 0.005 {
+            needsRender = true
+        }
+    }
+
+    private func fillSceneWhiteSnapshot() {
+        var pattern: PatternSpec?
+        if case .pattern(let p) = source { pattern = p }
+        let ref = resolvedReferenceWhite(pattern: pattern)
+        snapshot.referenceWhite = ref.nits
+        snapshot.referenceWhiteSource = ref.source
+        snapshot.sceneCount = sceneWhite.state.sceneCount
+        if pattern == nil, snapshot.isHDR, sceneWhite.state.sceneCount > 0 {
+            let state = sceneWhite.state
+            snapshot.frameWhite = state.frameWhite
+            snapshot.sceneWhite = state.smoothedWhite
+            snapshot.anchor = state.anchor
+            snapshot.whiteFractionOfH = params.curve(state.smoothedWhite / ref.nits)
+        } else {
+            snapshot.frameWhite = nil
+            snapshot.sceneWhite = nil
+            snapshot.anchor = nil
+            snapshot.whiteFractionOfH = nil
+        }
+    }
+
+    private func saveAnchor() {
+        guard let anchorKey, hdrHint, sceneWhite.state.sceneCount > 0 else { return }
+        UserDefaults.standard.set(sceneWhite.state.anchor, forKey: anchorKey)
+    }
+
+    /// HDR10 içerik ışık seviyesi (MaxCLL, MaxFALL); 4 bayt, büyük uçlu.
+    nonisolated static func contentLightLevel(_ description: CMFormatDescription) -> (maxCLL: Double, maxFALL: Double)? {
+        guard let data = CMFormatDescriptionGetExtension(description,
+                                                         extensionKey: kCMFormatDescriptionExtension_ContentLightLevelInfo) as? Data,
+              data.count >= 4 else { return nil }
+        let b = [UInt8](data)
+        let cll = Double(UInt16(b[0]) << 8 | UInt16(b[1]))
+        let fall = Double(UInt16(b[2]) << 8 | UInt16(b[3]))
+        guard cll > 0 || fall > 0 else { return nil }
+        return (cll, fall)
     }
 
     private func cadenceLabel() -> String {
@@ -500,6 +621,7 @@ final class LabEngine: NSObject {
             source: sourceLabel, thermal: snapshot.thermal.label, lowPower: snapshot.lowPower, captured: snapshot.captured,
             gpuP50: snapshot.gpuP50, gpuP95: snapshot.gpuP95, dropped: snapshot.droppedFrames, cadence: snapshot.cadence,
             jitterMs: snapshot.vsyncJitterMs, outputMax: snapshot.outputMax, playing: snapshot.playing,
-            chromeVisible: chromeVisible, panel: panelName, event: event)
+            referenceWhite: snapshot.referenceWhite, frameWhite: snapshot.frameWhite, sceneWhite: snapshot.sceneWhite,
+            anchor: snapshot.anchor, chromeVisible: chromeVisible, panel: panelName, event: event)
     }
 }

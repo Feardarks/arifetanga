@@ -1,6 +1,6 @@
 # S0 Nit Laboratuvarı: kurulum ve test rehberi
 
-**Sürüm 0.2.0.** Amaç, ürünün 1 numaralı vaadini cihazda ölçmek: iPhone 11 Pro + iOS 27, SDR'da da HDR'da da beyazı panel tepesine (≈ 1200 nit) çıkarabiliyor mu ve bunu film boyunca sürdürebiliyor mu? (02-cozum §10.1)
+**Sürüm 0.3.0 (S0 + S0b).** Amaç, ürünün 1 numaralı vaadini cihazda ölçmek: iPhone 11 Pro + iOS 27, SDR'da da HDR'da da beyazı panel tepesine (≈ 1200 nit) çıkarabiliyor mu ve bunu film boyunca sürdürebiliyor mu? (02-cozum §10.1)
 
 ## 1. Kurulum
 
@@ -87,6 +87,7 @@ Dosyaları iPhone'a **Dosyalar** uygulaması (iCloud Drive, "iPhone'umda" ya da 
 | T8 | **Okunabilirlik (K-T1)** | Okunabilirlik deseni (tam ekran 10000 nit). | HUD ve şerit metinleri okunuyor mu? Ekran fotoğrafı çek. |
 | T10 | **Eşitlik testi (AS-26, K2)** | Şerit → **Eşitlik testi**. %10 pencere ve PQ 1000 ile **Başlat**. 5 denemede A/B'den hangisi daha parlak, ya da **Aynı** mı, yanıtla. Bir yarı Nit (SDR beyaz × H), diğeri Apple'ın kendi HDR beyazı; hangisinin hangisi olduğu gizli. | Sonuç kartı (≥ 4/5 "Aynı" → geçti). Ekran fotoğrafı ve CSV. PQ 4000 ve 10000 ile tekrarla. |
 | T11 | **Tonalite testi (K11)** | Bir SDR video aç, şerit → **Tonalite testi**. Solda Apple'ın SDR video işleyişi, sağda Nit (H = 1). 2,2 / 2,4 / 1,96 arasında geçiş yap; sol yarıya en çok benzeyeni seçip **Bu eşleşiyor**'a bas. | Seçilen gama varsayılan olur ve CSV'ye yazılır. |
+| T12 | **Sahne beyazı (S0b, AS-38)** | HDR10 bir film aç (tercihen beyazı 100–150 nite koyulmuş, "karanlık" görünen bir film). Parametreler → HDR referans beyazı = **Sahne**. HUD'daki satırı izle: `sahne beyazı X nit · çapa A · L_ref L → 0,95 H`. Aynı sahnede **Sabit 203**'e geçip "→ … H" değerini karşılaştır. Parlak bir obje (far, patlama, beyaz çarşaf) giren sahnelerde parlaklık "pompalıyor" mu, gözle bak. 10 dk izleyip CSV'yi paylaş. | Gündüz ve diyalog sahnelerinde beyaz ≥ 0,9 H olmalı (Sahne kipinde). Pompalama görülmemeli. CSV'de `L_ref`, `W_f`, `W_hat`, `A` kolonları ve "Sahne kesimi" olayları var. Kesimler kaçıyorsa Parametreler → Kesim eşiği'ni 0,05'e indirip tekrarla. |
 | T9 | **Dayanıklılık (K8, AS-28)** | HDR10 dosyası, Döngü açık, 2 saat. Üç ayrı çalıştırma: Nit + Tepe Kilidi, Nit (kilit kapalı), Referans. Şarjda değil, oda sıcaklığında. | CSV'yi paylaş. Headroom çöküşü olup olmadığını, ısıyı ve pil yüzdesini (başta ve sonda) not et. |
 
 Her testten sonra CSV'yi paylaşıp (AirDrop, Dosyalar ya da e-posta) bana gönderebilirsin. Raporu (`τ_up`, `w`/`κ`, γ, titreşim ve Tepe Kilidi varsayılanları) bu verilerden çıkaracağım.
@@ -96,4 +97,5 @@ Her testten sonra CSV'yi paylaşıp (AirDrop, Dosyalar ya da e-posta) bana gönd
 - Yalnızca MP4/MOV. MKV, Dolby Vision işleme, altyazı ve PiP yok (S2 ve sonrası).
 - Desenler yalnızca Nit yolunda çizilir.
 - Ölçekleyici varsayılan olarak "Kaliteli": büyütmede bicubic, 4K küçültmede 2×2 süper örnekleme. Parametreler'den bilineere geçilebilir. Kareler hedef vsync'e hizalı sunulur.
-- HDR'da referans beyaz sabit 203 nit. Sahne bazlı tespit S0b'de; Parametreler'den elle 100–300 nit arası değiştirilebilir.
+- Sahne bazlı referans beyaz (S0b) HDR10 ve HLG'de çalışır. Dolby Vision L1/L2/L8 yolu S2'de, libdovi ile gelir. Film çapası başlık (dosya adı) bazında hatırlanır; ikinci izlemede çapa baştan doğrudur.
+- Desenler her zaman sabit 203 nit (ya da elle değer) kullanır; sahne tahmini desen ölçümünü etkilemez.

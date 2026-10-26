@@ -33,6 +33,9 @@ struct NitLabHUD: View {
                     line(brightnessLine)
                     line("ısı \(snapshot.thermal.label) · DGM \(snapshot.lowPower ? "açık" : "kapalı") · ekran kaydı \(snapshot.captured ? "var" : "yok")",
                          color: snapshot.lowPower || snapshot.thermal.rawValue >= 2 ? DS.amber : .white)
+                    if snapshot.isHDR, params.mode == .nit {
+                        line(sceneWhiteLine, color: params.referenceWhiteMode == .scene ? .white : DS.secondary)
+                    }
                     line("GPU p50 \(TR.num(snapshot.gpuP50, 1)) · p95 \(TR.num(snapshot.gpuP95, 1)) ms (hedef ≤ \(snapshot.isHDR ? "3,0" : "1,5"))")
                     line("kare: düşen \(snapshot.droppedFrames) · kadans \(snapshot.cadence) · sapma \(TR.num(snapshot.vsyncJitterMs, 1)) ms")
                     if let ms = snapshot.lastSwitchMs {
@@ -56,6 +59,24 @@ struct NitLabHUD: View {
     private var curveSuffix: String {
         guard params.mode == .nit, snapshot.isHDR else { return "" }
         return params.curveMode == .maximum ? " · Maksimum" : " · Dengeli"
+    }
+
+    /// "sahne beyazı 128 nit · çapa 135 · L_ref 128 → 0,95 H · histogram P90"
+    private var sceneWhiteLine: String {
+        var parts: [String] = []
+        if let white = snapshot.sceneWhite {
+            parts.append("sahne beyazı \(TR.num(white, 0)) nit")
+        }
+        if let anchor = snapshot.anchor {
+            parts.append("çapa \(TR.num(anchor, 0))")
+        }
+        var ref = "L_ref \(TR.num(snapshot.referenceWhite, 0))"
+        if let fraction = snapshot.whiteFractionOfH {
+            ref += " → \(TR.num(fraction)) H"
+        }
+        parts.append(ref)
+        parts.append(snapshot.referenceWhiteSource)
+        return parts.joined(separator: " · ")
     }
 
     private var brightnessLine: String {

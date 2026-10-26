@@ -25,6 +25,10 @@ final class Telemetry {
         var jitterMs: Double
         var outputMax: Double
         var playing: Bool
+        var referenceWhite: Double
+        var frameWhite: Double?
+        var sceneWhite: Double?
+        var anchor: Double?
         var chromeVisible: Bool
         var panel: String
         var event: String
@@ -53,14 +57,16 @@ final class Telemetry {
         var out = "# Arifetanga Nit Laboratuvarı · S0\n"
         out += "# parametreler: \(paramsHeader)\n"
         out += "t_s,zaman,H_cur,H_pot,H_s,H_eff,parlaklik,durum,mod,kaynak,isi,dusuk_guc,ekran_kaydi,"
-        out += "gpu_p50_ms,gpu_p95_ms,dusen_kare,kadans,sapma_ms,cikis_maks,oynatiyor,chromeVisible,panel,olay\n"
+        out += "gpu_p50_ms,gpu_p95_ms,dusen_kare,kadans,sapma_ms,cikis_maks,oynatiyor,L_ref,W_f,W_hat,A,chromeVisible,panel,olay\n"
         func f(_ v: Double, _ d: Int = 4) -> String { String(format: "%.\(d)f", v) }
         func q(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
+        func o(_ v: Double?) -> String { v.map { f($0, 1) } ?? "" }
         for r in rows {
             out += [f(r.t, 2), iso.string(from: r.date), f(r.hCur), f(r.hPot), f(r.hS), f(r.hEff), f(r.brightness, 3),
                     q(r.status), r.mode, q(r.source), r.thermal, r.lowPower ? "1" : "0", r.captured ? "1" : "0",
                     f(r.gpuP50, 3), f(r.gpuP95, 3), String(r.dropped), q(r.cadence), f(r.jitterMs, 2), f(r.outputMax),
-                    r.playing ? "1" : "0", r.chromeVisible ? "1" : "0", r.panel, q(r.event)].joined(separator: ",")
+                    r.playing ? "1" : "0", f(r.referenceWhite, 1), o(r.frameWhite), o(r.sceneWhite), o(r.anchor),
+                    r.chromeVisible ? "1" : "0", r.panel, q(r.event)].joined(separator: ",")
             out += "\n"
         }
         let stamp = DateFormatter()

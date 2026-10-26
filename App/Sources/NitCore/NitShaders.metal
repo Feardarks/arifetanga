@@ -202,3 +202,59 @@ fragment float4 nitFragment(VOut in [[stage_in]],
 
     return float4(min(outc, float3(H)), 1.0);
 }
+
+static float pqInverseEOTF(float nits) {
+    const float m1 = 2610.0 / 16384.0;
+    const float m2 = 2523.0 / 4096.0 * 128.0;
+    const float c1 = 3424.0 / 4096.0;
+    const float c2 = 2413.0 / 4096.0 * 32.0;
+    const float c3 = 2392.0 / 4096.0 * 32.0;
+    float y = pow(max(nits, 0.0) / 10000.0, m1);
+    return pow((c1 + c2 * y) / (1.0 + c3 * y), m2);
+}
+
+// Sahne beyazı histogramı (02-cozum §3.5.1): ekrandaki video alanının 1/4 çözünürlüğünde,
+// piksel başına maxRGB'nin PQ kodu, 256 kutu. HDR10'da R'G'B' zaten PQ'dur (PQ monoton:
+// max(R',G',B') = PQ(maxRGB)); HLG önce nite, sonra PQ'ya çevrilir. Kaynak kod değerlerinden
+// hesaplanır, çıkıştan değil; bu yüzden headroom ile geri besleme kurulamaz.
+kernel void nitHistogram(texture2d<float> lumaTex [[texture(0)]],
+                         texture2d<float> chromaTex [[texture(1)]],
+                         constant NitUniforms &u [[buffer(0)]],
+                         device atomic_uint *hist [[buffer(1)]],
+                         uint2 gid [[thread_position_in_grid]],
+                         uint2 grid [[threads_per_grid]],
+                         uint lid [[thread_index_in_threadgroup]],
+                         uint2 tgSize [[threads_per_threadgroup]]) {
+    threadgroup atomic_uint local[256];
+    uint count = tgSize.x * tgSize.y;
+    for (uint i = lid; i < 256; i += count) {
+        atomic_store_explicit(&local[i], 0u, memory_order_relaxed);
+    }
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    constexpr sampler s(filter::linear, address::clamp_to_edge);
+    float2 uv = (float2(gid) + 0.5) / float2(grid);
+    float y = lumaTex.sample(s, uv).r;
+    float2 c = chromaTex.sample(s, uv).rg;
+    float3 ycc = float3((y - u.yRange.x) * u.yRange.y,
+                        (c.x - u.yRange.z) * u.yRange.w,
+                        (c.y - u.yRange.z) * u.yRange.w);
+    float3 sig = clamp(float3(dot(u.ycc0.xyz, ycc), dot(u.ycc1.xyz, ycc), dot(u.ycc2.xyz, ycc)), float3(0.0), float3(1.0));
+    float pq;
+    if (int(u.tone.y) == 2) {
+        float3 nits = decodeTransfer(sig, 2, 1.0);
+        pq = pqInverseEOTF(max(nits.r, max(nits.g, nits.b)));
+    } else {
+        pq = max(sig.r, max(sig.g, sig.b));
+    }
+    uint bin = min(uint(pq * 256.0), 255u);
+    atomic_fetch_add_explicit(&local[bin], 1u, memory_order_relaxed);
+    threadgroup_barrier(mem_flags::mem_threadgroup);
+
+    for (uint i = lid; i < 256; i += count) {
+        uint v = atomic_load_explicit(&local[i], memory_order_relaxed);
+        if (v > 0) {
+            atomic_fetch_add_explicit(&hist[i], v, memory_order_relaxed);
+        }
+    }
+}

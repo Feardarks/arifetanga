@@ -139,12 +139,34 @@ final class GPUStats: @unchecked Sendable {
     }
 }
 
+/// Sahne beyazı histogramları: Metal tamamlanma işleyicisinden yazılır, motor her vsync'te en sonuncuyu alır.
+final class HistogramStore: @unchecked Sendable {
+    private let lock = NSLock()
+    private var latest: (bins: [UInt32], pts: Double)?
+
+    func put(_ bins: [UInt32], pts: Double) {
+        lock.lock()
+        latest = (bins, pts)
+        lock.unlock()
+    }
+
+    func take() -> (bins: [UInt32], pts: Double)? {
+        lock.lock()
+        defer { latest = nil; lock.unlock() }
+        return latest
+    }
+}
+
 /// Nit Çekirdeği: Y'CbCr kareyi (ya da deseni) EDR'li `CAMetalLayer`'a çizer.
 final class NitRenderer {
     let device: MTLDevice
     let gpuStats = GPUStats()
+    let histograms = HistogramStore()
     private let queue: MTLCommandQueue
     private let pipeline: MTLRenderPipelineState
+    private let histogramPipeline: MTLComputePipelineState
+    private let histogramBuffers: [MTLBuffer]
+    private var histogramIndex = 0
     private let textureCache: CVMetalTextureCache
     private let dummyLuma: MTLTexture
     private let dummyChroma: MTLTexture
@@ -158,7 +180,13 @@ final class NitRenderer {
         desc.vertexFunction = library.makeFunction(name: "nitVertex")
         desc.fragmentFunction = library.makeFunction(name: "nitFragment")
         desc.colorAttachments[0].pixelFormat = .rgba16Float
-        guard let pipeline = try? device.makeRenderPipelineState(descriptor: desc) else { return nil }
+        guard let pipeline = try? device.makeRenderPipelineState(descriptor: desc),
+              let histogramFunction = library.makeFunction(name: "nitHistogram"),
+              let histogramPipeline = try? device.makeComputePipelineState(function: histogramFunction) else { return nil }
+        let histogramBuffers = (0..<3).compactMap { _ in
+            device.makeBuffer(length: 256 * MemoryLayout<UInt32>.stride, options: .storageModeShared)
+        }
+        guard histogramBuffers.count == 3 else { return nil }
 
         var cache: CVMetalTextureCache?
         guard CVMetalTextureCacheCreate(nil, nil, device, nil, &cache) == kCVReturnSuccess, let cache else { return nil }
@@ -173,6 +201,8 @@ final class NitRenderer {
         self.device = device
         self.queue = queue
         self.pipeline = pipeline
+        self.histogramPipeline = histogramPipeline
+        self.histogramBuffers = histogramBuffers
         self.textureCache = cache
         self.dummyLuma = dl
         self.dummyChroma = dc
@@ -234,7 +264,8 @@ final class NitRenderer {
                 pattern: PatternSpec?,
                 settings: RenderSettings,
                 headroom: Double,
-                presentAt: CFTimeInterval? = nil) -> Double {
+                presentAt: CFTimeInterval? = nil,
+                histogramPTS: Double? = nil) -> Double {
         guard let drawable = layer.nextDrawable(),
               let commandBuffer = queue.makeCommandBuffer() else { return 0 }
 
@@ -248,6 +279,7 @@ final class NitRenderer {
 
         var u = NitUniforms()
         var keepAlive: [CVMetalTexture] = []
+        var histogramGrid: MTLSize?
         let drawableSize = CGSize(width: drawable.texture.width, height: drawable.texture.height)
         var isHDR = false
 
@@ -268,6 +300,8 @@ final class NitRenderer {
             let viewport = aspectFitViewport(content: CGSize(width: sourceWidth, height: Double(CVPixelBufferGetHeight(pixelBuffer))),
                                              in: drawableSize)
             encoder.setViewport(viewport)
+            // Histogram, ekrandaki video alanının 1/4 çözünürlüğünde (02-cozum §3.5.1).
+            histogramGrid = MTLSize(width: max(Int(viewport.width / 4), 1), height: max(Int(viewport.height / 4), 1), depth: 1)
             u.scaler = SIMD4(settings.highQualityScaler ? 1 : 0, Float(viewport.width / max(sourceWidth, 1)),
                              Float(1 / max(viewport.width, 1)), Float(1 / max(viewport.height, 1)))
             let storage = format.bitDepth == 10 ? 65535.0 / 64.0 : 255.0
@@ -296,6 +330,27 @@ final class NitRenderer {
         encoder.setFragmentBytes(&u, length: MemoryLayout<NitUniforms>.stride, index: 0)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         encoder.endEncoding()
+
+        // Sahne beyazı histogramı: yalnızca istenen (yeni HDR) karelerde, aynı komut tamponunda.
+        var histogramBuffer: MTLBuffer?
+        if let histogramPTS, let grid = histogramGrid, isHDR, keepAlive.count == 2,
+           let blit = commandBuffer.makeBlitCommandEncoder() {
+            let buffer = histogramBuffers[histogramIndex]
+            histogramIndex = (histogramIndex + 1) % histogramBuffers.count
+            blit.fill(buffer: buffer, range: 0..<buffer.length, value: 0)
+            blit.endEncoding()
+            if let compute = commandBuffer.makeComputeCommandEncoder() {
+                compute.setComputePipelineState(histogramPipeline)
+                compute.setTexture(CVMetalTextureGetTexture(keepAlive[0]), index: 0)
+                compute.setTexture(CVMetalTextureGetTexture(keepAlive[1]), index: 1)
+                compute.setBytes(&u, length: MemoryLayout<NitUniforms>.stride, index: 0)
+                compute.setBuffer(buffer, offset: 0, index: 1)
+                compute.dispatchThreads(grid, threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
+                compute.endEncoding()
+                histogramBuffer = buffer
+            }
+        }
+
         // Hedef vsync'e hizalı sunum (02-cozum §3.8).
         if let presentAt {
             commandBuffer.present(drawable, atTime: presentAt)
@@ -305,10 +360,17 @@ final class NitRenderer {
 
         let stats = gpuStats
         let textures = keepAlive
+        let store = histograms
+        let pts = histogramPTS ?? 0
+        let completedHistogram = histogramBuffer
         commandBuffer.addCompletedHandler { cb in
             _ = textures
             let ms = (cb.gpuEndTime - cb.gpuStartTime) * 1000
             if ms > 0 { stats.add(ms) }
+            if let completedHistogram {
+                let bins = completedHistogram.contents().bindMemory(to: UInt32.self, capacity: 256)
+                store.put(Array(UnsafeBufferPointer(start: bins, count: 256)), pts: pts)
+            }
         }
         commandBuffer.commit()
 

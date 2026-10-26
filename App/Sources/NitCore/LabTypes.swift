@@ -62,6 +62,13 @@ enum LabSource: Equatable {
     case pattern(PatternSpec)
 }
 
+/// HDR referans beyazının kaynağı (02-cozum §3.5.1, tasarım C-13).
+enum ReferenceWhiteMode: String, CaseIterable {
+    case scene = "Sahne"
+    case fixed = "Sabit 203"
+    case manual = "Elle"
+}
+
 /// Laboratuvarın ayarlanabilir parametreleri (03-tasarim §9.1 S0-E).
 struct NitParams: Equatable {
     var mode: RenderMode = .nit
@@ -79,7 +86,13 @@ struct NitParams: Equatable {
     var dither = true
     var ditherBits = 10
     var sdrGamma = 2.4
+    /// Elle kipteki referans beyaz (100–300 nit).
     var referenceWhiteNits = NitTone.defaultReferenceWhiteNits
+    var referenceWhiteMode: ReferenceWhiteMode = .scene
+    /// Sahne kipinde film çapasından en fazla sapma (stop).
+    var sceneDeviationStops = 0.5
+    /// Sahne kesimi eşiği (CDF farkı); AS-38'de ayarlanır.
+    var cutThreshold = 0.08
     var highQualityScaler = true
 
     var curve: NitCurve {
@@ -105,7 +118,8 @@ struct NitParams: Equatable {
         return "mod=\(mode.rawValue); egri=\(curveMode == .maximum ? "Maksimum" : "Dengeli"); w=\(c.w); kappa=\(c.kappa); "
             + "tau_up_ms=\(tauUpMs); olu_bant_%=\(deadbandPercent); tepe_kilidi=\(peakLock); adim=\(peakStep); "
             + "aralik_ms=\(peakIntervalMs); esik=\(peakThreshold); titresim=\(dither); b=\(ditherBits); "
-            + "sdr_gama=\(sdrGamma); L_ref=\(referenceWhiteNits); olcekleyici=\(highQualityScaler ? "kaliteli" : "bilineer")"
+            + "sdr_gama=\(sdrGamma); L_ref_kip=\(referenceWhiteMode.rawValue); L_ref_elle=\(referenceWhiteNits); "
+            + "sapma_stop=\(sceneDeviationStops); kesim_esigi=\(cutThreshold); olcekleyici=\(highQualityScaler ? "kaliteli" : "bilineer")"
     }
 }
 
@@ -139,6 +153,15 @@ struct LabSnapshot {
     var recordingSeconds = 0.0
     var lastSwitchMs: Double?
     var errorMessage: String?
+    /// Sahne beyazı (yalnızca HDR): kare P90, süzülmüş Ŵ, film çapası A ve kullanılan L_ref (nit).
+    var frameWhite: Double?
+    var sceneWhite: Double?
+    var anchor: Double?
+    var referenceWhite = NitTone.defaultReferenceWhiteNits
+    /// Sahnenin beyazının çıktığı değer, H'nin kesri olarak: f(Ŵ / L_ref).
+    var whiteFractionOfH: Double?
+    var referenceWhiteSource = "sabit 203"
+    var sceneCount = 0
 
     /// P-2: çıkış hiçbir zaman sistemin o an verdiği headroom'u aşmaz.
     var p2OK: Bool { outputMax <= hCur + 1e-6 }

@@ -19,7 +19,21 @@ struct ParameterPanel: View {
                 slider("κ", value: $model.params.balancedKappa, range: 0.40...0.60, digits: 2)
 
                 group("HDR referans beyazı")
-                slider("L_ref (nit)", value: $model.params.referenceWhiteNits, range: 100...300, digits: 0)
+                Picker("Referans beyaz", selection: $model.params.referenceWhiteMode) {
+                    ForEach(ReferenceWhiteMode.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                switch model.params.referenceWhiteMode {
+                case .scene:
+                    slider("Sapma δ (stop)", value: $model.params.sceneDeviationStops, range: 0...1, digits: 2)
+                    slider("Kesim eşiği", value: $model.params.cutThreshold, range: 0.03...0.15, digits: 2)
+                    Text("Sahne beyazı her sahnede histogramın P90'ından ölçülür; film çapasından en fazla δ stop sapar (80–300 nit).")
+                        .font(.caption).foregroundStyle(DS.secondary)
+                case .fixed:
+                    Text("BT.2408 referans beyazı: 203 nit.").font(.caption).foregroundStyle(DS.secondary)
+                case .manual:
+                    slider("L_ref (nit)", value: $model.params.referenceWhiteNits, range: 100...300, digits: 0)
+                }
 
                 group("Headroom")
                 slider("τ_up (ms)", value: $model.params.tauUpMs, range: 50...1000, digits: 0)
