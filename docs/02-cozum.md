@@ -1729,6 +1729,14 @@ Packages/DesignSystem/{Package.swift, Sources/DSCore/*, Sources/DesignSystem/{To
 | S10 | **Oynatma hızı ve altyazı gecikmesi (rev. 6)** | **AS-39** | §10.3b | 2–3 g | Hafta 3 (S3'ten sonra) |
 | S9 | ISO/BDMV ve AV1 | AS-8, AS-7 | 20 diskin ≥ 19'unda ana başlık doğru. AV1 1080p ≥ 30 fps. | 3 g | Hafta 4 |
 
+> **Uygulama notu: S2 v0.5 (S2.1–S2.3).** Hedef yapıdan sapan ya da ona eklenen noktalar:
+> - **Bağımlılıklar:** FFmpeg n8.0 yalnızca LGPL demux/parser/bsf ile, libdovi (dovi_tool C API) cargo-c ile statik XCFramework olarak CI'da derlenir ve önbelleğe alınır. `deps.yml` ayrı bir iş akışı değil, `ios-build` içindeki önbellek adımıdır.
+> - **Kendi hattımız:** libavformat demux → `CMSampleBuffer` → VideoToolbox (Nit) ya da `AVSampleBufferVideoRenderer` (Referans, DV'de `dvh1` + `dvcC/dvvC`). Saat ana makine saatine bağlı `CMTimebase`. Ses henüz yok (S3).
+> - **M2TS/TS:** Annex B paketleri demux sırasında uzunluk önekliye çevrilir; `hvcC/avcC` VPS/SPS/PPS'ten üretilir (`MediaFormat` paket hedefi, Linux'ta test edilir). UHD Blu-ray'in iki PID'li M2TS'sinde EL akışı okunmaz; görüntü HDR10 olarak oynar.
+> - **DV L1:** Nit yolunda her paketin RPU'su ayrıştırılır, L1 PTS'ye göre eşlenir. L1 kesimi `scene_refresh_flag` ya da ≥ 0,1 stop değişimdir (her karede oynayan kodlamalarda pompalamayı önlemek için ölü bant, en az 0,5 s arayla). DV'de histogram yine üretilir ama yalnızca `W_hist` olarak kaydedilir (AS-38 `k` kalibrasyonu). L2/L8 trim düzeltmesi henüz yok.
+> - **P7 → P8.1:** Yalnızca Referans yolunda. NAL 63 atılır; RPU MEL'de kip 4 (eşleme korunur), FEL'de kip 2 (eşleme etkisiz) ile dönüştürülür. Dönüşüm başarısız olursa RPU da atılır (kare HDR10 BL olarak görünür).
+> - **P5:** Nit yolu S2.4'e (AS-30) kadar kapalı; P5 otomatik olarak Referans'a yönlendirilir.
+
 ### 10.3 AS-37: Boost ve limiter (M10)
 
 | Senaryo | Ölçüt |
