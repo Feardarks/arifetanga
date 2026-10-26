@@ -1,6 +1,6 @@
-# S0 Nit Laboratuvarı: kurulum ve test rehberi
+# Nit Laboratuvarı: kurulum ve test rehberi
 
-**Sürüm 0.3.0 (S0 + S0b).** Amaç, ürünün 1 numaralı vaadini cihazda ölçmek: iPhone 11 Pro + iOS 27, SDR'da da HDR'da da beyazı panel tepesine (≈ 1200 nit) çıkarabiliyor mu ve bunu film boyunca sürdürebiliyor mu? (02-cozum §10.1)
+**Sürüm 0.5.0 (S0 + S0b + S2.1–S2.3).** Amaç, ürünün 1 numaralı vaadini cihazda ölçmek: iPhone 11 Pro + iOS 27, SDR'da da HDR'da da beyazı panel tepesine (≈ 1200 nit) çıkarabiliyor mu ve bunu film boyunca sürdürebiliyor mu? (02-cozum §10.1)
 
 ## 1. Kurulum
 
@@ -38,7 +38,9 @@ Sideloadly yolu yeterliyse bu bölümü atlayabilirsin. **Actions → İmzalı I
 
 ## 2. Test dosyaları
 
-S0, AVFoundation'ın açabildiği **MP4/MOV** dosyalarıyla çalışır. MKV desteği S2'de gelecek. Kendi rip'lerinden, yeniden kodlamadan şöyle MP4 üretebilirsin:
+**v0.5'ten itibaren MKV, M2TS ve TS dosyaları doğrudan açılır** (kendi hattımız: FFmpeg demux → VideoToolbox; HUD'daki biçim satırının sonunda "kendi hattımız" yazar). Bu yolda henüz **ses yok** (S3). MP4/MOV dosyaları varsayılan olarak AVPlayer ile açılır; Dosya panelindeki **MP4/MOV'u kendi hattımızla aç** anahtarıyla onlar da kendi hattımızdan oynatılır.
+
+Aşağıdaki MP4 dönüşümleri artık yalnızca karşılaştırma içindir (AVPlayer yolu, AS-1 testi). Yeniden kodlama yapılmaz:
 
 ```bash
 # SDR (1080p Blu-ray, H.264): görüntü kopyalanır, ses AAC'ye çevrilir
@@ -49,7 +51,12 @@ ffmpeg -i film.mkv -map 0:v:0 -map 0:a:0 -c:v copy -tag:v hvc1 -c:a aac -b:a 256
 
 # Dolby Vision'lı kaynakta (P7/P8) RPU'yu at, saf HDR10 kalsın (ffmpeg ≥ 7)
 ffmpeg -i film.mkv -map 0:v:0 -map 0:a:0 -c:v copy -bsf:v dovi_rpu=strip=1 -tag:v hvc1 -c:a aac -b:a 256k -t 600 hdr10.mp4
+
+# MKV'nin ilk 2 dakikası, MKV olarak (DV korunur; T13–T15 için kısa örnek)
+ffmpeg -i film.mkv -map 0:v:0 -c:v copy -t 120 ornek-dv.mkv
 ```
+
+Dolby Vision profilini görmek için: `ffprobe -v error -show_streams -select_streams v:0 film.mkv | grep -i dv_` (`dv_profile=7/8/5`). Uygulamada da HUD'daki biçim satırında "DV P8.1", "DV P7 (BL+EL)" gibi görünür.
 
 `-t 600` ilk 10 dakikayı alır. 2 saatlik dayanıklılık testi için bunu kaldır; Laboratuvar'daki **Döngü** de dosyayı sürekli tekrarlar.
 
@@ -88,14 +95,21 @@ Dosyaları iPhone'a **Dosyalar** uygulaması (iCloud Drive, "iPhone'umda" ya da 
 | T10 | **Eşitlik testi (AS-26, K2)** | Şerit → **Eşitlik testi**. %10 pencere ve PQ 1000 ile **Başlat**. 5 denemede A/B'den hangisi daha parlak, ya da **Aynı** mı, yanıtla. Bir yarı Nit (SDR beyaz × H), diğeri Apple'ın kendi HDR beyazı; hangisinin hangisi olduğu gizli. | Sonuç kartı (≥ 4/5 "Aynı" → geçti). Ekran fotoğrafı ve CSV. PQ 4000 ve 10000 ile tekrarla. |
 | T11 | **Tonalite testi (K11)** | Bir SDR video aç, şerit → **Tonalite testi**. Solda Apple'ın SDR video işleyişi, sağda Nit (H = 1). 2,2 / 2,4 / 1,96 arasında geçiş yap; sol yarıya en çok benzeyeni seçip **Bu eşleşiyor**'a bas. | Seçilen gama varsayılan olur ve CSV'ye yazılır. |
 | T12 | **Sahne beyazı (S0b, AS-38)** | HDR10 bir film aç (tercihen beyazı 100–150 nite koyulmuş, "karanlık" görünen bir film). Parametreler → HDR referans beyazı = **Sahne**. HUD'daki satırı izle: `sahne beyazı X nit · çapa A · L_ref L → 0,95 H`. Aynı sahnede **Sabit 203**'e geçip "→ … H" değerini karşılaştır. Parlak bir obje (far, patlama, beyaz çarşaf) giren sahnelerde parlaklık "pompalıyor" mu, gözle bak. 10 dk izleyip CSV'yi paylaş. | Gündüz ve diyalog sahnelerinde beyaz ≥ 0,9 H olmalı (Sahne kipinde). Pompalama görülmemeli. CSV'de `L_ref`, `W_f`, `W_hat`, `A` kolonları ve "Sahne kesimi" olayları var. Kesimler kaçıyorsa Parametreler → Kesim eşiği'ni 0,05'e indirip tekrarla. |
+| T13 | **Kendi hattımız (S2.2)** | Bir MKV (HEVC HDR10), bir M2TS (Blu-ray remux) ve bir 1080p H.264 MKV aç. Her birinde 1'er dk oynat, ileri/geri sar, **Nit ↔ Referans** arasında geçiş yap, Döngü'yü dene. | Görüntü geliyor mu, takılma ya da yeşil/bozuk kare var mı? HUD'da düşen kare ve kadans (24p'de "3:2" ya da "5:5"). Hata mesajı çıkarsa ekran fotoğrafı. |
+| T14 | **Referans'ta Dolby Vision (AS-1, S2.3)** | DV **P8.1** bir MKV'yi Referans'ta aç. Aynı dosyanın RPU'su atılmış MP4'ünü (`hdr10.mp4`, yukarıda) de Referans'ta aç. Parlak sahnelerde ikisini karşılaştır. Sonra **P7** bir MKV (UHD Blu-ray'den) ile tekrarla. | DV tetikleniyorsa MKV'deki görüntü HDR10 sürümünden farklı (genellikle vurgularda daha kontrollü, sahneden sahneye değişen) olmalı. İkisi birebir aynıysa DV tetiklenmiyor demektir; yaz. P7'de biçim satırında "Referans'ta DV P8.1" ve olaylarda "DV P7 EL türü: MEL/FEL" görünmeli. |
+| T15 | **DV L1 sahne beyazı (AS-38 DV, AS-2)** | DV bir MKV'yi Nit'te, Parametreler → HDR referans beyazı = **Sahne** ile 10 dk izle. | HUD: `… · DV L1 (k = 4) · hist P90 X` satırı ve `RPU … · ort … · en kötü … ms` satırı. RPU süresi ortalamada < 2 ms olmalı. CSV'de `W_f` (L1'den), `W_hist` (histogramdan) ve `rpu_us` kolonları var; bu ikisinin oranından `k` kalibre edilecek. "DV L1 geçersiz" olayı çıkarsa yaz. |
 | T9 | **Dayanıklılık (K8, AS-28)** | HDR10 dosyası, Döngü açık, 2 saat. Üç ayrı çalıştırma: Nit + Tepe Kilidi, Nit (kilit kapalı), Referans. Şarjda değil, oda sıcaklığında. | CSV'yi paylaş. Headroom çöküşü olup olmadığını, ısıyı ve pil yüzdesini (başta ve sonda) not et. |
 
 Her testten sonra CSV'yi paylaşıp (AirDrop, Dosyalar ya da e-posta) bana gönderebilirsin. Raporu (`τ_up`, `w`/`κ`, γ, titreşim ve Tepe Kilidi varsayılanları) bu verilerden çıkaracağım.
 
-## 5. Bilinen sınırlar (v0.2)
+## 5. Bilinen sınırlar (v0.5)
 
-- Yalnızca MP4/MOV. MKV, Dolby Vision işleme, altyazı ve PiP yok (S2 ve sonrası).
+- Kendi hattımızda (MKV/M2TS/TS) ses yok; S3'te gelecek. Altyazı ve PiP yok.
+- Dolby Vision **P5** Nit yolunda henüz gösterilemez (IPTPQc2 renk dönüşümü S2.4'te); şimdilik otomatik olarak Referans'ta oynatılır.
+- UHD Blu-ray'in **iki ayrı PID'li** M2TS'sinde (BL ve EL ayrı akış) yalnızca BL okunur: görüntü HDR10 olarak oynar, DV devreye girmez. MKV'ye (makemkv / dovi_tool ile tek iz) dönüştürülmüş P7 dosyalarında DV çalışır.
+- DV'de L2/L8 trim düzeltmesi henüz uygulanmıyor; sahne beyazı yalnızca L1'den (`k = 4`).
+- 10-bit H.264 (Hi10P) donanımda çözülmez; HEVC ve 8-bit H.264 desteklenir.
 - Desenler yalnızca Nit yolunda çizilir.
 - Ölçekleyici varsayılan olarak "Kaliteli": büyütmede bicubic, 4K küçültmede 2×2 süper örnekleme. Parametreler'den bilineere geçilebilir. Kareler hedef vsync'e hizalı sunulur.
-- Sahne bazlı referans beyaz (S0b) HDR10 ve HLG'de çalışır. Dolby Vision L1/L2/L8 yolu S2'de, libdovi ile gelir. Film çapası başlık (dosya adı) bazında hatırlanır; ikinci izlemede çapa baştan doğrudur.
+- Sahne bazlı referans beyaz HDR10 ve HLG'de histogramdan, Dolby Vision'da (P7/P8, Nit yolunda) RPU L1'den gelir. Film çapası başlık (dosya adı) bazında hatırlanır; ikinci izlemede çapa baştan doğrudur.
 - Desenler her zaman sabit 203 nit (ya da elle değer) kullanır; sahne tahmini desen ölçümünü etkilemez.
