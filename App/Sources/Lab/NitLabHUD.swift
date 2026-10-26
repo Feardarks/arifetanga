@@ -36,6 +36,9 @@ struct NitLabHUD: View {
                     if snapshot.isHDR, params.mode == .nit {
                         line(sceneWhiteLine, color: params.referenceWhiteMode == .scene ? .white : DS.secondary)
                     }
+                    if let rpu = snapshot.rpuSummary {
+                        line(rpu, color: DS.secondary)
+                    }
                     line("GPU p50 \(TR.num(snapshot.gpuP50, 1)) · p95 \(TR.num(snapshot.gpuP95, 1)) ms (hedef ≤ \(snapshot.isHDR ? "3,0" : "1,5"))")
                     line("kare: düşen \(snapshot.droppedFrames) · kadans \(snapshot.cadence) · sapma \(TR.num(snapshot.vsyncJitterMs, 1)) ms")
                     if let ms = snapshot.lastSwitchMs {
@@ -76,6 +79,9 @@ struct NitLabHUD: View {
         }
         parts.append(ref)
         parts.append(snapshot.referenceWhiteSource)
+        if let hist = snapshot.histogramWhite {
+            parts.append("hist P90 \(TR.num(hist, 0))")
+        }
         return parts.joined(separator: " · ")
     }
 

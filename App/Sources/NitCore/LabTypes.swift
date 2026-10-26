@@ -165,6 +165,11 @@ struct LabSnapshot {
     var whiteFractionOfH: Double?
     var referenceWhiteSource = "sabit 203"
     var sceneCount = 0
+    /// DV L1 kullanılırken karşılaştırma için kaynak histogramının P90'ı (AS-38'de `k` kalibrasyonu).
+    var histogramWhite: Double?
+    /// DV RPU işleme özeti (S2.3); DV yoksa `nil`. Süre RPU başına ortalama (µs).
+    var rpuSummary: String?
+    var rpuMeanMicros: Double?
 
     /// P-2: çıkış hiçbir zaman sistemin o an verdiği headroom'u aşmaz.
     var p2OK: Bool { outputMax <= hCur + 1e-6 }

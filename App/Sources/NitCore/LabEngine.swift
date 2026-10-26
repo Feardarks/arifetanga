@@ -91,6 +91,14 @@ final class LabEngine: NSObject {
     private var nativeForcedReference = false
     private static let nativeExtensions: Set<String> = ["mkv", "webm", "m2ts", "mts", "ts"]
 
+    // Dolby Vision RPU (S2.3): L1 sahne beyazı ve Referans'ta P7 → P8.1.
+    private var dovi: DoviRpuProcessor?
+    private var l1Validity = DolbyVisionL1Validity()
+    /// Sahne beyazı şu an DV L1'den mi besleniyor? Değilse histogramdan.
+    private var sceneWhiteFromL1 = false
+    private var loggedElType: String?
+    private var loggedRpuErrors = 0
+
     /// Kullanıcının seçtiği mod; P5 gibi durumlarda fiilen Referans gösterilir.
     private var effectiveMode: RenderMode { nativeForcedReference ? .reference : params.mode }
 
@@ -347,6 +355,11 @@ final class LabEngine: NSObject {
     private func resetFrameState() {
         native?.stop()
         native = nil
+        dovi = nil
+        sceneWhiteFromL1 = false
+        snapshot.rpuSummary = nil
+        snapshot.rpuMeanMicros = nil
+        snapshot.histogramWhite = nil
         nativeForcedReference = false
         surface.nativeBackend = false
         surface.apply(.single(effectiveMode))
@@ -485,6 +498,10 @@ final class LabEngine: NSObject {
             if isPlayingNow { ticksSinceFrame += 1 }
         }
 
+        // Sahne beyazı, DV: gösterilen karenin RPU L1'i (geçerliyse histogram yerine; §3.5.1 öncelik 1).
+        if let dovi, let pts = newFramePTS, let l1 = dovi.l1(forPTS: pts) {
+            updateSceneWhite(l1: l1, pts: pts)
+        }
         // Sahne beyazı: önceki karelerin histogramları (bir karelik gecikme önemsiz; §3.5.1).
         if let result = renderer?.histograms.take() {
             updateSceneWhite(bins: result.bins, pts: result.pts)
@@ -574,6 +591,7 @@ final class LabEngine: NSObject {
             snapshot.playing = isPlayingNow
             snapshot.recordingSeconds = telemetry.elapsed
             fillSceneWhiteSnapshot()
+            fillRpuSnapshot()
             onSnapshot?(snapshot)
         }
     }
@@ -618,6 +636,22 @@ final class LabEngine: NSObject {
         sceneWhite = SceneWhiteEstimator(config: sceneWhiteConfig, initialAnchor: initialAnchor)
         lastAnchorSave = CACurrentMediaTime()
 
+        // DV: Nit yolunda L1 okunur; P7 Referans'ta P8.1 olarak bildirilir (EL atılır, RPU dönüştürülür).
+        dovi = DoviRpuProcessor(info: info)
+        l1Validity = DolbyVisionL1Validity()
+        sceneWhiteFromL1 = false
+        loggedElType = nil
+        loggedRpuErrors = 0
+        var referenceNote = ""
+        if let dovi {
+            player.nitPacketObserver = { @Sendable packet in dovi.observe(packet) }
+            if let source = info.dovi, let config = DoviRpuProcessor.referenceConfig(for: source) {
+                player.referencePacketRewriter = { @Sendable packet in dovi.rewriteForReference(packet) }
+                player.setReferenceDovi(config)
+                referenceNote = " · Referans'ta \(config.label)"
+            }
+        }
+
         nativeForcedReference = info.dovi?.profile == 5
         surface.nativeBackend = true
         surface.sampleLayer.controlTimebase = player.timebase
@@ -630,7 +664,7 @@ final class LabEngine: NSObject {
         updatePeakLockEnabled()
 
         snapshot.isHDR = info.isHDR
-        snapshot.formatLabel = info.label + " · kendi hattımız"
+        snapshot.formatLabel = info.label + referenceNote + " · kendi hattımız"
         if nativeForcedReference {
             snapshot.errorMessage = "Dolby Vision P5: Nit yolu S2.4'te; şimdilik Referans gösteriliyor"
         }
@@ -665,6 +699,7 @@ final class LabEngine: NSObject {
         case .scene:
             if pattern != nil { return (NitTone.defaultReferenceWhiteNits, "desen: sabit 203") }
             let state = sceneWhite.state
+            if sceneWhiteFromL1 { return (state.referenceWhite, "DV L1 (k = \(TR.num(sceneWhite.config.doviK, 0)))") }
             return (state.referenceWhite, state.sceneCount > 0 ? "histogram P90" : "çapa (histogram bekleniyor)")
         }
     }
@@ -676,16 +711,84 @@ final class LabEngine: NSObject {
     }
 
     private func updateSceneWhite(bins: [UInt32], pts: Double) {
+        // DV L1 kullanılırken histogram yalnızca karşılaştırma içindir (AS-38: `k` kalibrasyonu).
+        if sceneWhiteFromL1 {
+            var p90 = SceneWhiteEstimator.percentileNits(bins, percentile: sceneWhite.config.percentile,
+                                                         minNits: sceneWhite.config.minNits)
+            if let cll = maxCLL, cll > 0, let w = p90 { p90 = min(w, cll) }
+            snapshot.histogramWhite = p90
+            return
+        }
+        snapshot.histogramWhite = nil
         let before = sceneWhite.state.referenceWhite
         sceneWhite.update(histogram: bins, time: pts, maxCLL: maxCLL)
         let state = sceneWhite.state
         if state.cut {
             event("Sahne kesimi · d \(TR.num(state.cutDistance, 3)) · kare beyazı \(state.frameWhite.map { TR.num($0, 0) } ?? "—") nit")
         }
-        // Statik karede L_ref değişirse yeniden çiz (yalnızca sahne kipinde etkili).
-        if params.referenceWhiteMode == .scene, abs(state.referenceWhite - before) / before >= 0.005 {
+        sceneWhiteChanged(from: before)
+    }
+
+    /// DV yolu: `W = min(k · avg, max)`; kesim `scene_refresh_flag` ya da L1 değişimi.
+    private func updateSceneWhite(l1: DoviL1, pts: Double) {
+        let wasValid = l1Validity.isValid
+        guard l1Validity.observe(averagePQ: l1.averagePQ, maxPQ: l1.maxPQ, time: pts) else {
+            if wasValid {
+                if sceneWhiteFromL1 { sceneWhite.markCut() }
+                sceneWhiteFromL1 = false
+                event("DV L1 geçersiz (max_pq = \(l1.maxPQ) ya da 2 dk sabit) → histogram P90")
+            }
+            return
+        }
+        if !sceneWhiteFromL1 {
+            sceneWhiteFromL1 = true
+            sceneWhite.markCut()
+            event("Sahne beyazı kaynağı: DV L1 (k = \(TR.num(sceneWhite.config.doviK, 0)))")
+        }
+        let before = sceneWhite.state.referenceWhite
+        sceneWhite.update(l1AveragePQ: l1.averagePQ, l1MaxPQ: l1.maxPQ, time: pts, sceneRefresh: l1.sceneRefresh,
+                          maxCLL: maxCLL)
+        let state = sceneWhite.state
+        if state.cut {
+            let average = PQ.eotf(Double(l1.averagePQ) / 4095)
+            let maximum = PQ.eotf(Double(l1.maxPQ) / 4095)
+            event("Sahne kesimi (DV\(l1.sceneRefresh ? " refresh" : " L1")) · avg \(TR.num(average, 1)) · max \(TR.num(maximum, 0)) · "
+                  + "kare beyazı \(state.frameWhite.map { TR.num($0, 0) } ?? "—") nit")
+        }
+        sceneWhiteChanged(from: before)
+    }
+
+    /// Statik karede L_ref değişirse yeniden çiz (yalnızca sahne kipinde etkili).
+    private func sceneWhiteChanged(from before: Double) {
+        if params.referenceWhiteMode == .scene, abs(sceneWhite.state.referenceWhite - before) / before >= 0.005 {
             needsRender = true
         }
+    }
+
+    /// RPU özeti (HUD) ve tek seferlik olaylar: EL türü, ilk hata.
+    private func fillRpuSnapshot() {
+        guard let dovi else { return }
+        let stats = dovi.currentStats
+        guard stats.rpus > 0 else {
+            snapshot.rpuSummary = "RPU: henüz yok"
+            return
+        }
+        var parts = ["RPU \(stats.rpus)"]
+        if let profile = stats.guessedProfile { parts.append("P\(profile)" + (stats.elType.map { " \($0)" } ?? "")) }
+        if stats.conversions > 0 { parts.append("→ 8.1 ×\(stats.conversions)") }
+        parts.append("ort \(TR.num(stats.meanMicros / 1000, 2)) · en kötü \(TR.num(stats.maxMicros / 1000, 2)) ms")
+        if stats.errors > 0 { parts.append("hata \(stats.errors)") }
+        snapshot.rpuSummary = parts.joined(separator: " · ")
+        snapshot.rpuMeanMicros = stats.meanMicros
+
+        if let el = stats.elType, el != loggedElType {
+            loggedElType = el
+            event("DV P7 EL türü: \(el) → Referans'ta P8.1, kip \(el == "FEL" ? "2 (eşleme etkisiz)" : "4 (eşleme korunur)")")
+        }
+        if stats.errors > 0, loggedRpuErrors == 0 {
+            event("RPU hatası: \(stats.lastError ?? "?")")
+        }
+        loggedRpuErrors = stats.errors
     }
 
     private func fillSceneWhiteSnapshot() {
@@ -744,6 +847,7 @@ final class LabEngine: NSObject {
             gpuP50: snapshot.gpuP50, gpuP95: snapshot.gpuP95, dropped: snapshot.droppedFrames, cadence: snapshot.cadence,
             jitterMs: snapshot.vsyncJitterMs, outputMax: snapshot.outputMax, playing: snapshot.playing,
             referenceWhite: snapshot.referenceWhite, frameWhite: snapshot.frameWhite, sceneWhite: snapshot.sceneWhite,
-            anchor: snapshot.anchor, chromeVisible: chromeVisible, panel: panelName, event: event)
+            anchor: snapshot.anchor, histogramWhite: snapshot.histogramWhite, rpuMicros: snapshot.rpuMeanMicros,
+            chromeVisible: chromeVisible, panel: panelName, event: event)
     }
 }

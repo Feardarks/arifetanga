@@ -39,6 +39,9 @@ final class NativePlayer: @unchecked Sendable {
     private var clockStarted = false
     private var loopEnabled = true
     private var thread: Thread?
+    /// Açılış ve sarmadan sonra ilk anahtar kareye kadar paketler atlanır (yalnızca demux thread'i).
+    private var awaitingKeyframe = true
+    private var skippedBeforeKeyframe = 0
 
     init(path: String, output: Output) throws {
         let demuxer = try NativeDemuxer(path: path)
@@ -176,6 +179,13 @@ final class NativePlayer: @unchecked Sendable {
                 continue
             }
 
+            // TS'de akış GOP ortasından başlayabilir; anahtar karesi hiç işaretlenmemiş dosyalar için sınır var.
+            if awaitingKeyframe, !packet.keyframe, skippedBeforeKeyframe < 600 {
+                skippedBeforeKeyframe += 1
+                continue
+            }
+            awaitingKeyframe = false
+
             switch out {
             case .nit:
                 nitPacketObserver?(packet)
@@ -236,6 +246,8 @@ final class NativePlayer: @unchecked Sendable {
         // Yol değiştiyse de Referans katmanında eski kareler kalmasın.
         renderer?.flush()
         demuxer.seek(to: target)
+        awaitingKeyframe = true
+        skippedBeforeKeyframe = 0
         frames.resume()
         lock.lock()
         let rate: Float64 = playing ? 1 : 0

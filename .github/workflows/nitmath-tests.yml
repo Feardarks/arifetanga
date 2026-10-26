@@ -1,6 +1,7 @@
 name: NitMath testleri
 
-# Renk matematiği, Nit eğrisi, headroom süzgeci ve Tepe Kilidi saf Swift'tir; ucuz Linux runner'ında test edilir.
+# Renk matematiği, Nit eğrisi, headroom süzgeci, Tepe Kilidi, sahne beyazı ve NAL/hvcC yardımcıları (MediaFormat)
+# saf Swift'tir; ucuz Linux runner'ında test edilir.
 on:
   workflow_dispatch:
   push:

@@ -1,5 +1,6 @@
 import CoreMedia
 import Foundation
+import MediaFormat
 import NitMath
 
 /// MKV/MP4/M2TS'deki Dolby Vision yapılandırması (`AVDOVIDecoderConfigurationRecord`).
@@ -41,8 +42,12 @@ struct VideoStreamInfo {
     var codecName: String
     var width: Int
     var height: Int
-    /// `hvcC` ya da `avcC` gövdesi.
+    /// `hvcC` ya da `avcC` gövdesi. M2TS/TS'de Annex B parametre kümelerinden üretilir.
     var configurationRecord: Data
+    /// Paketler kaynakta Annex B mi (M2TS/TS)? Öyleyse demux sırasında uzunluk önekliye çevrilir.
+    var annexB: Bool
+    /// Örneklerdeki NAL uzunluk önekinin bayt sayısı (`hvcC`/`avcC`'den).
+    var nalLengthSize: Int
     var timeBase: (num: Int32, den: Int32)
     var frameRate: Double
     var primaries: SourcePrimaries
@@ -138,6 +143,9 @@ final class NativeDemuxer {
             if result < 0 { return nil }
             defer { av_packet_unref(packet) }
             guard packet.pointee.stream_index == streamIndex, packet.pointee.size > 0, let bytes = packet.pointee.data else { continue }
+            let size = Int(packet.pointee.size)
+            let data = info.annexB ? NALUnits.lengthPrefixed(fromAnnexB: UnsafeRawBufferPointer(start: bytes, count: size))
+                                   : Data(bytes: bytes, count: size)
             let tb = info.timeBase
             let nopts = arif_nopts_value()
             let rawPTS = packet.pointee.pts != nopts ? packet.pointee.pts : packet.pointee.dts
@@ -145,7 +153,7 @@ final class NativeDemuxer {
             func time(_ v: Int64) -> CMTime {
                 v == nopts ? .invalid : CMTime(value: v * Int64(tb.num), timescale: tb.den)
             }
-            return DemuxedPacket(data: Data(bytes: bytes, count: Int(packet.pointee.size)),
+            return DemuxedPacket(data: data,
                                  pts: time(rawPTS), dts: time(rawDTS),
                                  duration: packet.pointee.duration > 0 ? time(packet.pointee.duration) : .invalid,
                                  keyframe: packet.pointee.flags & AV_PKT_FLAG_KEY != 0)
@@ -179,6 +187,7 @@ final class NativeDemuxer {
         guard let extradata = par.extradata, par.extradata_size > 0 else {
             throw DemuxError.open("codec yapılandırması (hvcC/avcC) yok")
         }
+        let isHEVC = par.codec_id == AV_CODEC_ID_HEVC
 
         let primaries: SourcePrimaries
         switch par.color_primaries {
@@ -205,6 +214,19 @@ final class NativeDemuxer {
         }
         if bitDepth <= 0 { bitDepth = transfer.isHDR ? 10 : 8 }
 
+        // MKV/MP4: hvcC/avcC. M2TS/TS: Annex B parametre kümeleri → kayıt burada üretilir.
+        var record = Data(bytes: extradata, count: Int(par.extradata_size))
+        let annexB = NALUnits.isAnnexB(record)
+        if annexB {
+            guard let converted = isHEVC ? NALUnits.hvcC(fromAnnexB: record, bitDepth: bitDepth)
+                                         : NALUnits.avcC(fromAnnexB: record, bitDepth: bitDepth) else {
+                throw DemuxError.open("Annex B parametre kümeleri (VPS/SPS/PPS) okunamadı")
+            }
+            record = converted
+        }
+        let lengthIndex = isHEVC ? 21 : 4
+        let nalLengthSize = record.count > lengthIndex ? Int(record[record.startIndex + lengthIndex] & 0x03) + 1 : 4
+
         var dovi: DoviConfig?
         if let sd = arif_stream_side_data(stream, AV_PKT_DATA_DOVI_CONF), let raw = sd.pointee.data,
            sd.pointee.size >= MemoryLayout<AVDOVIDecoderConfigurationRecord>.size {
@@ -229,7 +251,7 @@ final class NativeDemuxer {
 
         return VideoStreamInfo(codecType: codecType, codecName: codecName,
                                width: Int(par.width), height: Int(par.height),
-                               configurationRecord: Data(bytes: extradata, count: Int(par.extradata_size)),
+                               configurationRecord: record, annexB: annexB, nalLengthSize: nalLengthSize,
                                timeBase: (stream.pointee.time_base.num, stream.pointee.time_base.den),
                                frameRate: rate, primaries: primaries, transfer: transfer, matrix: matrix,
                                fullRange: par.color_range == AVCOL_RANGE_JPEG, bitDepth: bitDepth, dovi: dovi,

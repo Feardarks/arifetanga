@@ -29,6 +29,8 @@ final class Telemetry {
         var frameWhite: Double?
         var sceneWhite: Double?
         var anchor: Double?
+        var histogramWhite: Double?
+        var rpuMicros: Double?
         var chromeVisible: Bool
         var panel: String
         var event: String
@@ -54,10 +56,10 @@ final class Telemetry {
     func exportCSV() throws -> URL {
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        var out = "# Arifetanga Nit Laboratuvarı · S0\n"
+        var out = "# Arifetanga Nit Laboratuvarı · S2\n"
         out += "# parametreler: \(paramsHeader)\n"
         out += "t_s,zaman,H_cur,H_pot,H_s,H_eff,parlaklik,durum,mod,kaynak,isi,dusuk_guc,ekran_kaydi,"
-        out += "gpu_p50_ms,gpu_p95_ms,dusen_kare,kadans,sapma_ms,cikis_maks,oynatiyor,L_ref,W_f,W_hat,A,chromeVisible,panel,olay\n"
+        out += "gpu_p50_ms,gpu_p95_ms,dusen_kare,kadans,sapma_ms,cikis_maks,oynatiyor,L_ref,W_f,W_hat,A,W_hist,rpu_us,chromeVisible,panel,olay\n"
         func f(_ v: Double, _ d: Int = 4) -> String { String(format: "%.\(d)f", v) }
         func q(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
         func o(_ v: Double?) -> String { v.map { f($0, 1) } ?? "" }
@@ -66,7 +68,7 @@ final class Telemetry {
                     q(r.status), r.mode, q(r.source), r.thermal, r.lowPower ? "1" : "0", r.captured ? "1" : "0",
                     f(r.gpuP50, 3), f(r.gpuP95, 3), String(r.dropped), q(r.cadence), f(r.jitterMs, 2), f(r.outputMax),
                     r.playing ? "1" : "0", f(r.referenceWhite, 1), o(r.frameWhite), o(r.sceneWhite), o(r.anchor),
-                    r.chromeVisible ? "1" : "0", r.panel, q(r.event)].joined(separator: ",")
+                    o(r.histogramWhite), o(r.rpuMicros), r.chromeVisible ? "1" : "0", r.panel, q(r.event)].joined(separator: ",")
             out += "\n"
         }
         let stamp = DateFormatter()
