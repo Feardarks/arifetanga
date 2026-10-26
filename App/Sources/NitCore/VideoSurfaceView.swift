@@ -19,8 +19,15 @@ enum SurfaceLayout: Equatable {
 /// en üstte yalnızca eşitlik testinde kullanılan PQ Referans yaması katmanı.
 final class VideoSurfaceView: UIView {
     let playerLayer = AVPlayerLayer()
+    /// Kendi hattımızın Referans yolu (S2.2): sıkıştırılmış örnekler, sistemin HDR/DV işleyişi.
+    let sampleLayer = AVSampleBufferDisplayLayer()
     let metalLayer = CAMetalLayer()
     let referencePatchLayer = CAMetalLayer()
+
+    /// Kaynak kendi hattımızdan geliyorsa Referans `sampleLayer`'dır, yoksa `playerLayer`.
+    var nativeBackend = false {
+        didSet { if nativeBackend != oldValue { apply(layout) } }
+    }
 
     /// Pencereye eklendiğinde ve boyut değiştiğinde çağrılır.
     var onLayout: (() -> Void)?
@@ -32,7 +39,11 @@ final class VideoSurfaceView: UIView {
         backgroundColor = .black
         playerLayer.videoGravity = .resizeAspect
         playerLayer.backgroundColor = UIColor.black.cgColor
+        sampleLayer.videoGravity = .resizeAspect
+        sampleLayer.backgroundColor = UIColor.black.cgColor
+        sampleLayer.isHidden = true
         layer.addSublayer(playerLayer)
+        layer.addSublayer(sampleLayer)
         layer.addSublayer(metalLayer)
         layer.addSublayer(referencePatchLayer)
         referencePatchLayer.isHidden = true
@@ -48,6 +59,7 @@ final class VideoSurfaceView: UIView {
         let scale = window?.screen.nativeScale ?? traitCollection.displayScale
         let pixels = CGSize(width: (bounds.width * scale).rounded(), height: (bounds.height * scale).rounded())
         playerLayer.frame = bounds
+        sampleLayer.frame = bounds
         for metal in [metalLayer, referencePatchLayer] {
             metal.frame = bounds
             metal.contentsScale = scale
@@ -72,19 +84,23 @@ final class VideoSurfaceView: UIView {
         switch newLayout {
         case .single(let mode):
             metalLayer.isHidden = mode != .nit
-            playerLayer.isHidden = mode != .reference
+            playerLayer.isHidden = mode != .reference || nativeBackend
+            sampleLayer.isHidden = mode != .reference || !nativeBackend
             referencePatchLayer.isHidden = true
         case .equality:
             metalLayer.isHidden = false
             playerLayer.isHidden = true
+            sampleLayer.isHidden = true
             referencePatchLayer.isHidden = false
         case .blank:
             metalLayer.isHidden = true
             playerLayer.isHidden = true
+            sampleLayer.isHidden = true
             referencePatchLayer.isHidden = true
         case .tonality:
             metalLayer.isHidden = false
             playerLayer.isHidden = false
+            sampleLayer.isHidden = true
             referencePatchLayer.isHidden = true
         }
         applyMasks()

@@ -32,7 +32,7 @@ struct NitLabScreen: View {
         .onAppear { model.appear() }
         .onDisappear { model.disappear() }
         .fileImporter(isPresented: $model.importerPresented,
-                      allowedContentTypes: [.movie, .mpeg4Movie, .quickTimeMovie]) { result in
+                      allowedContentTypes: Self.videoTypes) { result in
             switch result {
             case .success(let url): model.open(url: url)
             case .failure(let error): model.showToast("Dosya seçilemedi: \(error.localizedDescription)")
@@ -44,6 +44,15 @@ struct NitLabScreen: View {
     }
 
     private var isTesting: Bool { model.equality != nil || model.toneTestActive }
+
+    /// MP4/MOV ve kendi hattımızın açtığı kapsayıcılar (MKV, M2TS, TS).
+    private static let videoTypes: [UTType] = {
+        var types: [UTType] = [.movie, .mpeg4Movie, .quickTimeMovie]
+        for ext in ["mkv", "webm", "m2ts", "mts", "ts"] {
+            if let type = UTType(filenameExtension: ext) { types.append(type) }
+        }
+        return types
+    }()
 
     private var labChrome: some View {
             VStack(spacing: 8) {

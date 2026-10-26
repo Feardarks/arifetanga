@@ -50,10 +50,14 @@ struct FilePanel: View {
                     .buttonStyle(.plain)
                 }
 
-                Text("MKV desteklenmez (S2'de gelir). Kendi rip'ini `ffmpeg -i film.mkv -c copy film.mp4` ile MP4'e kopyalayabilirsin.")
+                section("Motor")
+                Toggle("MP4/MOV'u kendi hattımızla aç", isOn: $model.params.preferNativeEngine)
+                    .font(.subheadline)
+                    .tint(DS.green)
+                Text("MKV, M2TS ve TS her zaman kendi hattımızla açılır: FFmpeg demux, VideoToolbox, Dolby Vision Referans'ta sistemde. Bu sürümde ses yok (S3).")
                     .font(.footnote)
                     .foregroundStyle(DS.secondary)
-                    .padding(.top, 4)
+                    .padding(.top, 2)
             }
             .padding(4)
         }

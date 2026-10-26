@@ -33,7 +33,9 @@ final class LabEngine: NSObject {
     var onStatusChange: ((HeadroomStatus) -> Void)?
     var chromeVisible = true
     var panelName = "yok"
-    var loop = true
+    var loop = true {
+        didSet { native?.loop = loop }
+    }
 
     var params = NitParams() {
         didSet { paramsChanged(from: oldValue) }
@@ -83,6 +85,15 @@ final class LabEngine: NSObject {
     private var lastAnchorSave: CFTimeInterval = 0
     private static let anchorPrefix = "nitLab.anchor."
 
+    // Kendi hattımız (S2.2): MKV/M2TS ve istenirse MP4/MOV.
+    private var native: NativePlayer?
+    /// DV P5 Nit yolunda henüz gösterilemez (S2.4); o zamana kadar Referans'a yönlendirilir.
+    private var nativeForcedReference = false
+    private static let nativeExtensions: Set<String> = ["mkv", "webm", "m2ts", "mts", "ts"]
+
+    /// Kullanıcının seçtiği mod; P5 gibi durumlarda fiilen Referans gösterilir.
+    private var effectiveMode: RenderMode { nativeForcedReference ? .reference : params.mode }
+
     override init() {
         renderer = NitRenderer()
         rendererAvailable = renderer != nil
@@ -93,7 +104,7 @@ final class LabEngine: NSObject {
             snapshot.errorMessage = "Metal başlatılamadı"
         }
         surface.playerLayer.player = player
-        surface.apply(.single(params.mode))
+        surface.apply(.single(effectiveMode))
         surface.onLayout = { [weak self] in
             self?.needsRender = true
             self?.referencePatchDirty = true
@@ -119,6 +130,7 @@ final class LabEngine: NSObject {
         displayLink?.invalidate()
         displayLink = nil
         player.pause()
+        native?.stop()
         saveAnchor()
         UIApplication.shared.isIdleTimerDisabled = false
         // Kullanıcı arada değiştirmediyse parlaklığı giriş değerine döndür (02-cozum §3.6).
@@ -144,6 +156,11 @@ final class LabEngine: NSObject {
         snapshot.formatLabel = "Yükleniyor…"
         event("Dosya: \(sourceLabel)")
 
+        if Self.nativeExtensions.contains(url.pathExtension.lowercased()) || params.preferNativeEngine {
+            loadNative(url: url)
+            return
+        }
+        surface.nativeBackend = false
         let asset = AVURLAsset(url: url)
         Task { [weak self] in
             do {
@@ -177,6 +194,11 @@ final class LabEngine: NSObject {
 
     func togglePlay() {
         guard case .file = source else { return }
+        if let native {
+            native.setPlaying(!native.isPlaying)
+            event(native.isPlaying ? "Oynat" : "Duraklat")
+            return
+        }
         if player.timeControlStatus == .playing {
             player.pause()
             event("Duraklat")
@@ -189,6 +211,10 @@ final class LabEngine: NSObject {
     func seek(to seconds: Double) {
         lastDisplayPTS = nil
         sceneWhite.markCut()
+        if let native {
+            native.seek(to: seconds)
+            return
+        }
         player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
     }
 
@@ -201,7 +227,8 @@ final class LabEngine: NSObject {
 
     /// Tonalite testinde gerçek SDR video gerekir: soldaki Referans yolu Apple'ın SDR video işleyişidir.
     var canRunToneTest: Bool {
-        if case .file = source, let currentFormat { return !currentFormat.transfer.isHDR }
+        // Sol yarı AVPlayerLayer'dır; kendi hattımızda bu test yok.
+        if native == nil, case .file = source, let currentFormat { return !currentFormat.transfer.isHDR }
         return false
     }
 
@@ -238,7 +265,7 @@ final class LabEngine: NSObject {
     func endTest() {
         guard labMode != .normal else { return }
         labMode = .normal
-        surface.apply(.single(params.mode))
+        surface.apply(.single(effectiveMode))
         updatePeakLockEnabled()
         needsRender = true
         event("Test bitti")
@@ -246,7 +273,7 @@ final class LabEngine: NSObject {
 
     private func updatePeakLockEnabled() {
         // Tonalite testinde iki yarı aynı SDR beyazında karşılaştırılır; parlaklık sabit kalmalı.
-        peakLock.enabled = params.peakLock && params.mode == .nit && labMode != .tonality
+        peakLock.enabled = params.peakLock && effectiveMode == .nit && labMode != .tonality
     }
 
     func exportCSV() throws -> URL {
@@ -318,6 +345,11 @@ final class LabEngine: NSObject {
     }
 
     private func resetFrameState() {
+        native?.stop()
+        native = nil
+        nativeForcedReference = false
+        surface.nativeBackend = false
+        surface.apply(.single(effectiveMode))
         output = nil
         currentBuffer = nil
         currentFormat = nil
@@ -338,7 +370,8 @@ final class LabEngine: NSObject {
         updatePeakLockEnabled()
         if params.mode != old.mode, labMode == .normal {
             switchStart = CACurrentMediaTime()
-            surface.apply(.single(params.mode))
+            surface.apply(.single(effectiveMode))
+            native?.setOutput(effectiveMode == .nit ? .nit : .reference)
         }
         telemetry.setParams(params.csvSummary)
         needsRender = true
@@ -386,7 +419,7 @@ final class LabEngine: NSObject {
             let result = peakLock.update(PeakLock.Input(
                 time: now, current: hCur, potential: hPot, brightness: brightness, lowPower: lowPower,
                 thermalSerious: thermal.rawValue >= ProcessInfo.ThermalState.serious.rawValue, captured: captured))
-            if let target = result.brightness, target > brightness, params.mode == .nit {
+            if let target = result.brightness, target > brightness, effectiveMode == .nit {
                 screen.brightness = CGFloat(target)
                 appSetBrightness = target
                 lastObservedBrightness = target
@@ -401,14 +434,28 @@ final class LabEngine: NSObject {
             }
         }
 
-        // Yeni video karesi.
+        // Yeni video karesi: AVPlayer çıkışından ya da kendi hattımızın kuyruğundan.
         var newFramePTS: Double?
-        if case .file = source, let output {
+        var arrived: (buffer: CVPixelBuffer, pts: Double)?
+        if case .file = source, let native {
+            if native.currentOutput == .nit,
+               let taken = native.frames.take(atOrBefore: native.mediaTime(atHostTime: link.targetTimestamp)) {
+                arrived = (taken.frame.buffer, taken.frame.pts)
+            }
+        } else if case .file = source, let output {
             let itemTime = output.itemTime(forHostTime: link.targetTimestamp)
             if output.hasNewPixelBuffer(forItemTime: itemTime) {
                 var displayTime = CMTime.invalid
                 if let pb = output.copyPixelBuffer(forItemTime: itemTime, itemTimeForDisplay: &displayTime) {
-                    let pts = displayTime.isValid ? displayTime.seconds : itemTime.seconds
+                    arrived = (pb, displayTime.isValid ? displayTime.seconds : itemTime.seconds)
+                }
+            }
+        }
+        if case .file = source {
+            if let arrived {
+                let pb = arrived.buffer
+                let pts = arrived.pts
+                do {
                     if let last = lastDisplayPTS {
                         let gap = pts - last
                         if gap > frameDuration * 1.5, gap < 1 {
@@ -426,14 +473,16 @@ final class LabEngine: NSObject {
                     if currentFormat == nil {
                         let format = FrameFormat.from(pb, hdrHint: hdrHint)
                         currentFormat = format
-                        snapshot.formatLabel = "\(CVPixelBufferGetWidth(pb))×\(CVPixelBufferGetHeight(pb)) · \(format.label)"
-                        snapshot.isHDR = format.transfer.isHDR
-                        event("Biçim: \(snapshot.formatLabel)")
+                        let frameLabel = "\(CVPixelBufferGetWidth(pb))×\(CVPixelBufferGetHeight(pb)) · \(format.label)"
+                        // Kendi hattımızda akış etiketi (codec, DV profili) korunur.
+                        if native == nil { snapshot.formatLabel = frameLabel }
+                        snapshot.isHDR = format.transfer.isHDR || (native?.info.isHDR ?? false)
+                        event("Biçim: \(frameLabel)")
                     }
                     needsRender = true
                 }
             }
-            if player.timeControlStatus == .playing { ticksSinceFrame += 1 }
+            if isPlayingNow { ticksSinceFrame += 1 }
         }
 
         // Sahne beyazı: önceki karelerin histogramları (bir karelik gecikme önemsiz; §3.5.1).
@@ -454,7 +503,7 @@ final class LabEngine: NSObject {
             let presentAt = link.targetTimestamp
             switch labMode {
             case .normal:
-                if params.mode == .nit {
+                if effectiveMode == .nit {
                     var pattern: PatternSpec?
                     if case .pattern(let p) = source { pattern = p }
                     // Histogram yalnızca yeni HDR karelerinde; L_ref kipinden bağımsız (teşhis için de gerekir).
@@ -497,7 +546,7 @@ final class LabEngine: NSObject {
         snapshot.hCur = hCur
         snapshot.hPot = hPot
         snapshot.hSmoothed = filter.smoothed
-        snapshot.hEff = params.mode == .nit ? hEff : hCur
+        snapshot.hEff = effectiveMode == .nit ? hEff : hCur
         snapshot.brightness = brightness
         snapshot.thermal = thermal
         snapshot.lowPower = lowPower
@@ -514,14 +563,87 @@ final class LabEngine: NSObject {
             snapshot.gpuP95 = p95
             snapshot.cadence = cadenceLabel()
             snapshot.vsyncJitterMs = jitterRing.max() ?? 0
-            snapshot.currentTime = player.currentTime().seconds.isFinite ? player.currentTime().seconds : 0
-            let duration = player.currentItem?.duration.seconds ?? 0
-            snapshot.duration = duration.isFinite ? duration : 0
-            snapshot.playing = player.timeControlStatus == .playing
+            if let native {
+                snapshot.currentTime = native.mediaTime
+                snapshot.duration = native.info.duration
+            } else {
+                snapshot.currentTime = player.currentTime().seconds.isFinite ? player.currentTime().seconds : 0
+                let duration = player.currentItem?.duration.seconds ?? 0
+                snapshot.duration = duration.isFinite ? duration : 0
+            }
+            snapshot.playing = isPlayingNow
             snapshot.recordingSeconds = telemetry.elapsed
             fillSceneWhiteSnapshot()
             onSnapshot?(snapshot)
         }
+    }
+
+    // MARK: Kendi hattımız
+
+    private var isPlayingNow: Bool {
+        native?.isPlaying ?? (player.timeControlStatus == .playing)
+    }
+
+    private func loadNative(url: URL) {
+        player.replaceCurrentItem(with: nil)
+        let path = url.path
+        let output: NativePlayer.Output = params.mode == .nit ? .nit : .reference
+        let title = url.lastPathComponent
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            do {
+                let player = try NativePlayer(path: path, output: output)
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.attachNative(player, title: title) } }
+            } catch {
+                let message = error.localizedDescription
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.fail(message) } }
+            }
+        }
+    }
+
+    private func attachNative(_ player: NativePlayer, title: String) {
+        // Açılış sürerken kullanıcı başka bir kaynak seçtiyse bu oyuncu kullanılmaz.
+        guard case .file(let url) = source, url.lastPathComponent == title, native == nil else {
+            player.stop()
+            return
+        }
+        native = player
+        let info = player.info
+        hdrHint = info.isHDR
+        frameDuration = info.frameRate > 0 ? 1 / info.frameRate : 1.0 / 24
+        maxCLL = info.maxCLL
+        let key = Self.anchorPrefix + title
+        anchorKey = key
+        let cached = UserDefaults.standard.double(forKey: key)
+        let initialAnchor = cached > 0 ? cached : SceneWhiteEstimator.initialAnchor(maxFALL: info.maxFALL)
+        sceneWhite = SceneWhiteEstimator(config: sceneWhiteConfig, initialAnchor: initialAnchor)
+        lastAnchorSave = CACurrentMediaTime()
+
+        nativeForcedReference = info.dovi?.profile == 5
+        surface.nativeBackend = true
+        surface.sampleLayer.controlTimebase = player.timebase
+        player.attach(renderer: surface.sampleLayer.sampleBufferRenderer)
+        player.loop = loop
+        player.onLoop = { [weak self] in MainActor.assumeIsolated { self?.nativeLooped() } }
+        player.onError = { [weak self] message in MainActor.assumeIsolated { self?.fail(message) } }
+        player.setOutput(effectiveMode == .nit ? .nit : .reference)
+        surface.apply(.single(effectiveMode))
+        updatePeakLockEnabled()
+
+        snapshot.isHDR = info.isHDR
+        snapshot.formatLabel = info.label + " · kendi hattımız"
+        if nativeForcedReference {
+            snapshot.errorMessage = "Dolby Vision P5: Nit yolu S2.4'te; şimdilik Referans gösteriliyor"
+        }
+        event("Kendi hattımız: \(info.label)" + (info.maxCLL.map { " · MaxCLL \(Int($0))" } ?? "")
+              + " · çapa \(TR.num(initialAnchor, 0)) nit · ses S3'te")
+        player.start()
+    }
+
+    private func nativeLooped() {
+        lastDisplayPTS = nil
+        sceneWhite.markCut()
+        saveAnchor()
+        event("Döngü başa sardı")
     }
 
     // MARK: Sahne beyazı

@@ -15,7 +15,7 @@ jobs:
   signed:
     name: İmzalı IPA
     runs-on: macos-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       IOS_CERT_P12_BASE64: ${{ secrets.IOS_CERT_P12_BASE64 }}
       IOS_CERT_PASSWORD: ${{ secrets.IOS_CERT_PASSWORD }}
@@ -82,6 +82,17 @@ jobs:
             echo "BUNDLE_ID=$BUNDLE_ID"
             echo "METHOD=$METHOD"
           } >> "$GITHUB_ENV"
+
+      - name: Native bağımlılık önbelleği (FFmpeg, libdovi)
+        id: deps-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ThirdParty/build
+          key: deps-ios-v1-${{ hashFiles('ThirdParty/*.sh', 'ThirdParty/versions.lock') }}
+
+      - name: Native bağımlılıkları derle (önbellek yoksa)
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        run: ThirdParty/build-all.sh
 
       - name: XcodeGen kur ve projeyi üret
         run: |
