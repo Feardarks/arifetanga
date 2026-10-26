@@ -919,7 +919,7 @@ Bunlar uygulamanın aşamayacağı sınırlardır; HUD'da ve teşhis kartında a
 - Parça değiştirilince o parçanın kayıtlı değeri yüklenir; kayıt yoksa 0 kullanılır.
 - Yeni bir dosya her zaman 0 ile başlar (sıfır ayar).
 
-**Motor arayüzü:** Komut `setSubtitleDelay(Duration)`, olay `subtitleDelayChanged(Duration)` (§14 G-04).
+**Motor arayüzü:** Komut `setSubtitleDelay(Duration)`, olay `subtitleDelayChanged(trackID:delay:)` (§14 G-04). Kalıcılığın sahibi ve şeması: §14 G-24.
 
 **Kapsam:** Otomatik senkron hâlâ kapsam dışıdır (kullanıcı kararı). Test: AS-39(c).
 
@@ -1813,6 +1813,12 @@ AS-34, MVP sırasında paralel sonuçlanırsa yalnızca kontur katmanı MVP sonu
 | K-34 | "Yanıp Sönen Işıkları Azalt" (Nit) | Uygulamamak (yalnızca kart); `MAFlashingLightsProcessor` | **`MAFlashingLightsProcessor`** (iOS 17 **[doğrulandı]**), `canProcessSurface` true dönerse. Dönmezse tasarımın kartı gösterilir. Bu, kullanıcının erişilebilirlik ayarıdır; P-1 ihlali değildir (G-10). |
 | K-35 | Sunucu kimlik doğrulama | Plex: yalnızca plex.tv/link kodu ya da web + PIN. Jellyfin: yalnızca parola ya da parola + Quick Connect | **Plex: web + PIN yoklaması; yedeği plex.tv/link kodu. Jellyfin: parola + Quick Connect** (G-15) |
 | K-36 | VobSub | Desteklememek; desteklemek | **Desteklemek** (FFmpeg `dvdsub`, PGS yolu, maliyeti düşük; G-07) |
+| K-37 | Bilgi istatistikleri (G-21) | `EngineState`'e eklemek; telemetriden okumak; ayrı akış | **Ayrı `stats()` akışı, 2 Hz, yalnızca abone varken.** Durum akışı şişmez; Bilgi kapalıyken hesap maliyeti yoktur. |
+| K-38 | Uzman ses komutları ve notlar (G-22) | Arayüzün türetmesi; motorun tam not listesi | **Komutlar ve snapshot alanları motorda; N-1…N-10 motorun `AudioNotice` listesinden.** Tek kaynak; bit-perfect nedenleri birleşik. Elle BT gecikmesi cihaz UID'si başına saklanır. |
+| K-39 | Yanıp Sönen Işıkları Azalt durumu (G-23) | Arayüzün kendi sorgusu; snapshot alanı + oynatma öncesi sorgu | **`FlashingLightsState` + `nitSupportsFlashingLightsMitigation()`.** Kart video başlamadan doğru gösterilir. |
+| K-40 | Dosya bazında kalıcılığın sahibi (G-24) | Motor; `Library` + uygulama köprüsü | **`Library` (SwiftData) + `FilePreferencesStore` köprüsü + `AppSettings`.** Motor durumsuz ve test edilebilir kalır. Kayıtlı değerler `OpenOptions` ile ilk kareden önce uygulanır. |
+| K-41 | Dosya kimliği | Yol; bookmark; içerik özeti; yol + değişme zamanı | **`locatorKey` + boyut; yedek eşleme `contentDigest` (2 MiB + boyut).** Değişme zamanı anahtara girmez; bookmark yalnızca erişim içindir; parça kimliği konteyner numarası + imza. |
+| K-42 | iCloud senkron kapsamı | Hepsi; hiçbiri; seçili | **İzleme durumu, içerik geçersiz kılmaları ve dosya tercihleri (CloudKit private DB). Önbellekler, kimlik bilgileri ve kalibrasyon yerel.** |
 
 ---
 
@@ -2004,18 +2010,46 @@ public struct RouteInfo: Sendable, Hashable {
     public var name: String
     public var sampleRate: Double
     public var isSpatial: Bool
+    public var deviceUID: String?                    // G-22: BT/USB cihaz kimliği (AVAudioSessionPortDescription.uid)
 }
 
 public enum AtmosPCMReason: Sendable, Hashable { case boost, dialog, playbackRate }
 
-public enum AudioNotice: Sendable, Hashable {        // tasarım N-1…N-7
+public enum NotBitPerfectReason: Sendable, Hashable {   // G-22: N-3 ve N-8 tek notta birleşir
+    case boost(dB: Double)
+    case playbackRate(Double)
+    case processing                                  // diyalog, gece modu, eşitleme vb.
+    case sampleRateMismatch(file: Double, output: Double)
+    case digitalVolume                               // DAC'ta donanım ses düzeyi yok
+}
+
+public enum AudioNotice: Sendable, Hashable {        // tasarım N-1…N-10
     case atmosDecodedForBoost                        // N-1
     case atmosPreservedBoostLocked                   // N-2
-    case notBitPerfect(boostDB: Double)              // N-3
+    case notBitPerfect(reasons: [NotBitPerfectReason]) // N-3 ve N-8 (G-22)
     case headphoneSafetyMayLimit                     // N-4
     case speakerLowCut                               // N-5
     case airPlayDelayed                              // N-6
     case atmosDecodedForDialog                       // N-7
+    case atmosDecodedForRate                         // N-9 (G-22)
+    case slowRateDelayedChanges                      // N-10 (G-22): hız < 1× iken ayar tepkisi gecikir
+}
+
+public enum TimePitchAlgorithm: Sendable, Hashable { case timeDomain, spectral, varispeed } // G-22
+public enum BluetoothDelay: Sendable, Hashable {     // G-22
+    case automatic                                   // synchronizer + outputLatency (§5.7)
+    case manual(Duration)                            // −500…+500 ms; motor sınırlar
+}
+public enum BoostScope: Sendable, Hashable {         // G-22, G-24
+    case route(RouteClass)                           // rota tablosundan (K-26)
+    case content                                     // "bu film için" geçersiz kılma
+}
+
+public enum FlashingLightsState: Sendable, Hashable {  // G-23
+    case settingOff                                  // MADimFlashingLightsEnabled() == false
+    case appliedInNit                                // MAFlashingLightsProcessor etkin
+    case unavailableInNit                            // canProcessSurface == false
+    case systemPath                                  // Referans modunda: sistem uygular (AS-31)
 }
 
 public enum PlaybackFailure: Sendable, Hashable {    // tasarım H-03…H-06
@@ -2083,8 +2117,11 @@ public enum EngineEvent: Sendable, Hashable {
     case resumed(at: Duration)                               // HUD-14
     case pictureInPictureChanged(isActive: Bool)
     case externalDisplayChanged(isConnected: Bool)
-    case playbackRateChanged(Double)                         // rev. 6
-    case subtitleDelayChanged(Duration)                      // rev. 6
+    case playbackRateChanged(Double)                         // rev. 6; arayüz "hızı hatırla" açıksa yazar (G-24)
+    case subtitleDelayChanged(trackID: Int?, delay: Duration)// rev. 6; arayüz parça başına yazar (G-24)
+    case boostChanged(percent: Double, scope: BoostScope)    // G-24: arayüz rota tablosuna ya da içerik kaydına yazar
+    case trackSelectionChanged(audio: Int?, subtitle: Int?, byUser: Bool) // G-24: byUser ise içerik kaydı
+    case flashingLightsChanged(FlashingLightsState)          // G-23
     case phaseChanged(PlaybackPhase)
 }
 
@@ -2114,6 +2151,42 @@ public struct ClockSnapshot: Sendable, Hashable {           // 1 Hz; .scrubbing'
     public var bufferedAhead: Duration
 }
 
+// G-21: Bilgi paneli ve sabitlenmiş katman istatistikleri. 2 Hz; yalnızca abone varken üretilir.
+public enum DecoderKind: Sendable, Hashable {
+    case videoToolbox, dav1d, ffmpeg(codec: String)          // video
+    case audioToolbox, ffmpegAudio(codec: String), passthrough(codec: String) // ses ("E-AC-3 JOC → sistem")
+    case system                                              // Referans: sistem çözer
+}
+public enum CadencePattern: Sendable, Hashable {
+    case uniform(vsyncsPerFrame: Int)                        // 60p: 1, 30p: 2
+    case pulldown(String)                                    // "3:2", "2:2:1", "1:1:1:2"
+    case irregular(averageVsyncsPerFrame: Double)            // 25p, 1,75× vb.
+}
+public struct CleanNitStats: Sendable, Hashable {
+    public var mode: CleanNitMode
+    public var amplification: Double?                        // "×11,8": tahmini beyaz nit / 100; S(b) yoksa nil
+    public var correctedTileFraction: Double                 // bant haritasında düzeltilen karo oranı
+}
+public struct StatsSnapshot: Sendable, Hashable {
+    public var gpuP50Ms, gpuP95Ms: Double                    // son 5 sn kayan pencere
+    public var gpuBudgetMs: Double                           // 4,5; erişilebilirlik işlemi açıkken ölçülen ek dahil
+    public var gpuBudgetIncludesAccessibility: Bool          // "4,5 ms + erişilebilirlik"
+    public var droppedFrames: Int                            // beklenmeyen; oturum toplamı
+    public var rateSkippedFrames: Int                        // hız nedeniyle bilerek atlanan (§4.10)
+    public var cadence: CadencePattern
+    public var presentErrorP95Ms: Double
+    public var averageBitrate: Int?                          // bit/s, dosya başından
+    public var instantBitrate: Int?                          // bit/s, son 1 sn
+    public var bufferedBytes: Int
+    public var bufferedSeconds: Double
+    public var videoDecoder: DecoderKind
+    public var audioDecoder: DecoderKind
+    public var cleanNit: CleanNitStats?                      // nil = etkin değil (neden TechProfile'dan)
+    public var truePeakCeilingDBTP: Double?                  // −1,0 / −1,5; nil = limiter yok (bit-perfect, kapalı)
+    public var timePitch: TimePitchAlgorithm?                // nil = 1×
+    public var memoryMB: Int
+}
+
 public struct DisplaySnapshot: Sendable, Hashable {
     public var mode: DisplayMode
     public var nitUnavailableReason: AutoReferenceReason?    // nil = Nit kullanılabilir
@@ -2125,6 +2198,7 @@ public struct DisplaySnapshot: Sendable, Hashable {
     public var expert: DisplayExpert
     public var abSplit: Double?                              // nil = kapalı (G-17)
     public var bandMap: Bool
+    public var flashingLights: FlashingLightsState           // G-23
 }
 
 public struct AudioSnapshot: Sendable, Hashable {
@@ -2134,7 +2208,14 @@ public struct AudioSnapshot: Sendable, Hashable {
     public var dialogEngine: DialogEngine?
     public var nightMode: Bool
     public var boostPercent: Double                          // 100…150
+    public var boostScope: BoostScope                        // G-22, G-24 ("bu film için" = .content)
     public var limiter: LimiterMode
+    public var aggressiveBoost: Bool                         // G-22 (L_max −7 LUFS)
+    public var preserveAtmos: Bool                           // G-22 (Atmos'u koru)
+    public var lfeToStereo: Bool                             // G-22 (stereo downmix'e LFE)
+    public var spatializeStereo: Bool                        // G-22 (.monoStereoAndMultichannel)
+    public var bluetoothDelay: BluetoothDelay                // G-22 (yalnızca BT rotasında anlamlı)
+    public var timePitch: TimePitchAlgorithm                 // G-22 (varsayılan .timeDomain)
     public var atmosNative: Bool
     public var notices: [AudioNotice]
 }
@@ -2165,8 +2246,32 @@ public enum MediaLocator: Sendable, Hashable {
 
 public enum ClockRate: Sendable, Hashable { case normal, scrubbing }
 
+/// G-24: Açılışta uygulanacak kayıtlı değerler. Arayüz (FilePreferencesStore) Library'den doldurur;
+/// motor bunları ilk kareden ÖNCE uygular (önce 1× sonra setRate gibi bir sıçrama olmaz).
+public struct OpenOptions: Sendable, Hashable {
+    public var startAt: Duration?                            // devam konumu
+    public var rate: Double?                                 // yalnızca "hızı hatırla" açıksa
+    public var subtitleDelays: [Int: Duration] = [:]         // trackID → gecikme (0 olanlar yok)
+    public var preferredAudioTrackID: Int?                   // içerik geçersiz kılma
+    public var preferredSubtitleTrackID: Int??               // .some(nil) = kullanıcı "kapalı" seçmiş
+    public var contentBoostPercent: Double?                  // "bu film için" boost
+    public init() {}
+}
+
+/// Uygulama ayarları; motor bellekte tutar, kalıcılığı uygulama yapar (G-24).
+public struct EngineConfiguration: Sendable, Hashable {
+    public var routeBoost: [RouteClass: Double] = [:]       // K-26; eksik rota = 100
+    public var display = DisplayExpert()
+    public var sceneWhiteMode: SceneWhiteMode = .sceneBased
+    public var limiter: LimiterMode = .smart
+    public var aggressiveBoost = false, preserveAtmos = false
+    public var lfeToStereo = false, spatializeStereo = false
+    public var bluetoothDelay: BluetoothDelay = .automatic
+    public init() {}
+}
+
 public enum EngineCommand: Sendable, Hashable {
-    case open(MediaLocator, startAt: Duration?), close
+    case open(MediaLocator, options: OpenOptions), close
     case play, pause, togglePlay
     case seek(to: Duration), seekBy(Duration)
     case setRate(Double)                                     // 0,5…2,0 (§4.10)
@@ -2175,7 +2280,11 @@ public enum EngineCommand: Sendable, Hashable {
     case setABSplit(Double?), setBandMap(Bool)
     case setDialog(DialogLevel), setNightMode(Bool)
     case setBoost(percent: Double), setRememberBoostForContent(Bool), setLimiter(LimiterMode)
-    case selectAudio(trackID: Int), selectSubtitle(trackID: Int?)
+    case setAggressiveBoost(Bool), setPreserveAtmos(Bool)            // G-22
+    case setLFEToStereo(Bool), setSpatializeStereo(Bool)            // G-22
+    case setBluetoothDelay(BluetoothDelay), setTimePitch(TimePitchAlgorithm) // G-22 (.spectral videoda reddedilir)
+    case setRouteBoostTable([RouteClass: Double])                    // G-24: ayarlar ekranından toplu güncelleme
+    case selectAudio(trackID: Int), selectSubtitle(trackID: Int?)   // trackID = konteyner parça numarası (G-24)
     case setSubtitleDelay(Duration), setSubtitleBrightness(t: Double)
     case setMoveToBand(Bool), setPGSScale(Double)
     case resetClipCounters
@@ -2198,7 +2307,11 @@ public enum EngineCommand: Sendable, Hashable {
 }
 
 public actor PlaybackEngine {
-    public init() { /* … */ }
+    public init(configuration: EngineConfiguration) { /* … */ }
+
+    /// G-23: Nit'in "Yanıp Sönen Işıkları Azalt"ı uygulayıp uygulayamayacağı, oynatma başlamadan sorgulanır.
+    /// Bir RGBA16F/extended linear P3 IOSurface ile canProcessSurface denenir; sonuç işlem ömrü boyunca önbelleğe alınır.
+    public static func nitSupportsFlashingLightsMitigation() async -> Bool { /* … */ false }
     public func send(_ command: EngineCommand) { /* … */ }
 
     // Her çağrı yeni bir abone akışı döndürür (çoklu yayın).
@@ -2208,6 +2321,7 @@ public actor PlaybackEngine {
     public nonisolated func headroom() -> AsyncStream<HeadroomSnapshot> { /* 10 Hz, .bufferingNewest(1) */ fatalError() }
     public nonisolated func meters() -> AsyncStream<MeterSnapshot> { /* 30 Hz, .bufferingNewest(1) */ fatalError() }
     public nonisolated func clock() -> AsyncStream<ClockSnapshot> { /* 1 Hz / 60 Hz, .bufferingNewest(1) */ fatalError() }
+    public nonisolated func stats() -> AsyncStream<StatsSnapshot> { /* 2 Hz, .bufferingNewest(1); G-21 */ fatalError() }
     @MainActor public var videoOutput: VideoOutput { /* … */ fatalError() }
 }
 ```
@@ -2221,6 +2335,7 @@ public actor PlaybackEngine {
 | `headroom()` | 10 Hz | `.bufferingNewest(1)` | Render thread'inin atomik durumundan, ayrı bir `.utility` görevi okur |
 | `meters()` | 30 Hz | `.bufferingNewest(1)` | §5.5'teki kilitsiz halka; PTS ≤ oynatma noktası |
 | `clock()` | 1 Hz; `setClockRate(.scrubbing)` ile 60 Hz | `.bufferingNewest(1)` | Synchronizer zamanı |
+| `stats()` (G-21) | 2 Hz | `.bufferingNewest(1)` | Motorun sayaçları ve render'ın GPU zaman damgası halkası; abone yoksa toplama da yapılmaz (yalnızca telemetri sayaçları sürer) |
 
 - Render thread'inden ana thread'e kare başına geçiş yapılmaz (tasarım §8.4).
 - **HUD'un sahibi arayüzdür.** Motor yalnızca olayı bildirir. Tekrar sınırlarını, öncelik kuyruğunu ve metinleri `HUDQueue` ile `DSCore.HUDCatalog` uygular. HUD-15 ("ilk Nit oynatması") motor olayı değildir; arayüz kalıcı bir bayrakla kendisi tetikler.
@@ -2322,6 +2437,175 @@ public actor PlaybackEngine {
 ### G-20: Laboratuvar telemetrisine iki alan
 
 **Karar:** `chromeVisible` ve `panel` CSV'ye eklendi (§9.4). Arayüz bunları değiştikçe `TelemetryRecorder.annotate(ui:)` ile bildirir.
+
+### G-21: Bilgi istatistik akışı (rev. 2)
+
+**Karar:** Altıncı akış eklendi: `stats()` → `StatsSnapshot`, 2 Hz, yalnızca abone varken üretilir (G-04 kod bloğu güncellendi).
+
+**Gerekçeler:**
+- GPU süreleri, kareler ve bit hızı yüksek frekanslı verilerdir; ama Bilgi paneli için 2 Hz yeterlidir.
+- Ayrı akış `EngineState`'i (≤ 10 Hz) şişirmez.
+- Abone yokken yüzdelik hesapları da yapılmaz; yalnızca telemetri sayaçları sürer.
+- Laboratuvar tam çözünürlüklü veri için telemetriden okumaya devam eder.
+
+| Bilgi satırı (tasarım §4.9) | `StatsSnapshot` alanı |
+|---|---|
+| GPU | `gpuP50Ms`, `gpuP95Ms`; bütçe `gpuBudgetMs` ("+ erişilebilirlik" ise `gpuBudgetIncludesAccessibility`) |
+| Kareler | `droppedFrames`, `cadence`, `presentErrorP95Ms`; hızda `rateSkippedFrames` ("atlanan N") |
+| Çözücü | `videoDecoder`, `audioDecoder` |
+| Temiz Nit | `cleanNit.mode`, `cleanNit.amplification` ("×11,8"; `S(b)` öğrenilmemişse yazılmaz), `cleanNit.correctedTileFraction` |
+| Limiter | `truePeakCeilingDBTP` (1× dışında −1,5 olabilir, §4.10) |
+| Hız | `timePitch` ("perde korunur: zaman alanı" / "varispeed") |
+| Dosya ve kaynak | `averageBitrate`, `instantBitrate`, `bufferedBytes`, `bufferedSeconds` |
+| Sistem | `memoryMB`. Isı, Düşük Güç Modu ve ekran kaydı olaylardan ve `HeadroomSnapshot`'tan gelir. |
+
+### G-22: Eksik uzman komutları ve notlar (rev. 2)
+
+**Karar:** Komutlar, `AudioSnapshot` alanları ve notlar eklendi (G-04 kod bloğu).
+- N-8…N-10 artık motorun `AudioNotice` listesinden gelir; arayüz bunları türetmez. Tek kaynak `audioNoticesChanged` olayıdır.
+- N-3 ile N-8 tek notta birleşir: `notBitPerfect(reasons: [.boost(dB:), .playbackRate(_:)])`.
+
+| Komut | Motor davranışı | Bölüm |
+|---|---|---|
+| `setAggressiveBoost(Bool)` | Boost yöneticisinin `L_max` değeri −10'dan −7 LUFS'e çıkar | §5.5 |
+| `setPreserveAtmos(Bool)` | Atmos içerikte boost %100'e kilitlenir ve N-2 gösterilir. Yalnızca **boost** nedeniyle PCM'e çözmeyi engeller. Diyalog ve hız, kullanıcının açık eylemi olduğu için yine PCM'e çözer (N-7, N-9). | §5.5 |
+| `setLFEToStereo(Bool)` | Stereo downmix'e LFE +0 dB eklenir (varsayılan dışarıda) | §5.3 |
+| `setSpatializeStereo(Bool)` | `allowedAudioSpatializationFormats = .monoStereoAndMultichannel` | §5.3 |
+| `setBluetoothDelay(BluetoothDelay)` | `.automatic`: synchronizer ve `outputLatency`. `.manual(d)`: video zaman çizgisi `d` kadar kaydırılır (−500…+500 ms, 10 ms adım). | §5.7 |
+| `setTimePitch(TimePitchAlgorithm)` | `.timeDomain` (varsayılan) ya da `.varispeed` (uzman). Videoda `.spectral` reddedilir; müzik ileride. Oynatma sırasında değişim flush gerektirebilir; §5.2'deki yeniden işleme mekanizmasıyla yapılır. | §4.10 |
+| `setRouteBoostTable([RouteClass: Double])` | Ayarlar'dan toplu güncelleme (K-26) | §5.5 |
+
+**Kalıcılık:**
+- Uzman değerlerinin hepsi genel uygulama ayarıdır (`AppSettings`, G-24). Uygulama bunları açılışta `EngineConfiguration` ile verir.
+- **Elle Bluetooth gecikmesi cihaz başına saklanır.** Anahtar `RouteInfo.deviceUID`'dir (yeni alan). Arayüz `audioRouteChanged` olayında o cihazın değerini `setBluetoothDelay` ile gönderir.
+- "Bu film için boost hatırla": G-24.
+
+### G-23: "Yanıp Sönen Işıkları Azalt" durumu (rev. 2)
+
+**Karar:** `DisplaySnapshot.flashingLights: FlashingLightsState` ve `flashingLightsChanged` olayı eklendi. Ayrıca oynatma başlamadan yapılabilen statik bir sorgu var: `PlaybackEngine.nitSupportsFlashingLightsMitigation()`.
+
+| Durum | Anlamı | Arayüz (tasarım §7.6) |
+|---|---|---|
+| `.settingOff` | `MADimFlashingLightsEnabled() == false` | Hiçbir şey |
+| `.appliedInNit` | Nit modunda, `MAFlashingLightsProcessor` etkin | "Uygulanıyor" satırı; bütçe "4,5 ms + erişilebilirlik" |
+| `.unavailableInNit` | Nit modunda ayar açık, ama `canProcessSurface == false` | Kart (ilk oynatmada) |
+| `.systemPath` | Referans modunda; sistemin uyguladığı varsayılır (AS-31) | Bilgi satırı |
+
+**Olay ve kart akışı:**
+- Olay iki durumda yayımlanır:
+  - Mod değişince.
+  - Sistem ayarı değişince. Ayar değişikliği bildirimi **[doğrulanmalı: MediaAccessibility bildirim adı]**; bildirim yoksa ayar her `open`'da ve ön plana dönüşte yeniden okunur.
+- **Kart için motor açılmadan cevap verilir.** Arayüz, ilk video oynatmasından önce şu kontrolü yapar: `MADimFlashingLightsEnabled() && !(await PlaybackEngine.nitSupportsFlashingLightsMitigation())`.
+  - Sorgu, RGBA16F / extended linear P3 bir test IOSurface'ı üzerinde `canProcessSurface` dener.
+  - Sonuç işlem ömrü boyunca önbelleğe alınır.
+  - Böylece kart, oynatma başlamadan doğru zamanda gösterilir.
+
+### G-24: Dosya bazında kalıcılığın sahibi (rev. 2)
+
+**Karar: Kalıcılığın sahibi uygulama tarafıdır; motor kalıcı kullanıcı verisi tutmaz (K-40).**
+
+| Veri | Sahibi | Yer |
+|---|---|---|
+| Hatırlanan hız, parça başına altyazı gecikmesi | `Library` (SwiftData), `FileStateRepository` (`ModelActor`) | `FilePreference`, `SubtitleDelayPref` |
+| Kullanıcının parça seçimi, "bu film için" boost | `Library` | `ContentOverride` |
+| Rota başına boost, uzman ses ve görüntü ayarları, BT cihaz gecikmeleri | `AppSettings` (UserDefaults, App) | → `EngineConfiguration` |
+| Cihaz kalibrasyonu (Tepe Kilidi `b_k`, `S(b)` tablosu) | Motorun kendisi (`NitCore`, UserDefaults) | Cihaza özgü; senkronlanmaz |
+
+- Köprü: `App/Features/Player/FilePreferencesStore` (tasarım §9.7). Motor ile `Library` arasındaki tek bağlantıdır.
+- `PlaybackEngine` `Library`'yi içe aktarmaz.
+- Not: Tasarım §2.3'teki `ROUTE_PREF` varlığı SwiftData'da değil, `AppSettings`'te tutulur. Gerekçe: motor açılışta bu değerlere SwiftData'yı beklemeden ihtiyaç duyar ve değerler tek cihaza özgüdür.
+
+**Akış:**
+
+```
+Açılış : FilePreferencesStore.resolve(file) → FileKey → kayıtlar → OpenOptions
+         → engine.send(.open(locator, options: OpenOptions))   // ilk kareden ÖNCE uygulanır
+         → OpenOptions kayıt içeriyorsa arayüz HUD-19'u kendisi gösterir
+Oturum : motor olayı → FilePreferencesStore yazar (500 ms durgunluktan sonra; basılı tutarken her adımda değil)
+         playbackRateChanged(r)                → rememberRate açıksa FilePreference.rate = r
+         subtitleDelayChanged(trackID: t, d)   → d ≠ 0: SubtitleDelayPref(t) = d · d = 0: kayıt silinir
+         trackSelectionChanged(a, s, byUser:)  → byUser ise ContentOverride.audio / subtitle
+         boostChanged(p, scope: .content)      → ContentOverride.boostPercent = p (+ rota sınıfı)
+         boostChanged(p, scope: .route(rc))    → AppSettings.routeBoost[rc] = p
+Arayüz : setRememberRate(false)  → FilePreference.rate silinir (motor komutu yok)
+```
+
+**`setRememberBoostForContent` komutunun motordaki anlamı:**
+- **`true`:** O anki boost değeri içerik kapsamına geçer (`AudioSnapshot.boostScope = .content`). Sonraki `setBoost` değişiklikleri rota tablosunu değiştirmez; `boostChanged(scope: .content)` yayımlanır.
+- **`false`:** Motor rota tablosundaki değere döner ve `boostChanged(scope: .route(rc))` yayımlar. Kullanıcı eylemi olduğu için ses düzeyinin düşmesi beklenen bir davranıştır.
+- **Güvenlik (K-26):** İçerik boost'u yalnızca kaydedildiği rota sınıfında geçerlidir. Örneğin hoparlörde %150 kaydedilmiş bir film kulaklıkta rota tablosunun değeriyle (varsayılan %100) açılır. Kayıt bu yüzden `boostRouteClass` alanını da taşır.
+
+**Dosya kimliği (`FileKey`) nasıl türetilir?**
+
+| Kaynak | `locatorKey` |
+|---|---|
+| Dosyalar / iPhone'umda | `files:<kaynak kökü UUID>/<köke göreli yol>` |
+| SMB | `smb:<kaynak UUID>/<paylaşım>/<yol>` (yol Unicode NFC'ye normalize edilir) |
+| Jellyfin | `jf:<sunucu kimliği>/<öğe kimliği>` |
+| Plex | `plex:<machineIdentifier>/<ratingKey>/<part kimliği>` |
+
+- **Eşleme sırası:**
+  1. `locatorKey` + `size` → kayıt bulunur.
+  2. Bulunmazsa `contentDigest` eşleşmesi aranır (dosya taşınmış, yeniden adlandırılmış ya da başka bir kaynakta kopyası var). Bulunursa kayıt yeni locator'a bağlanır.
+  3. O da yoksa yeni kayıt açılır.
+- **`contentDigest`** = `SHA-256(ilk 1 MiB ‖ son 1 MiB ‖ boyut)`, hex. Kütüphane taramasında hesaplanır; Demux başlığı zaten okumaktadır.
+  - Taranmamış bir dosyada açılışta arka planda hesaplanır: SMB'de 2 MiB okuma, ≈ 50–150 ms; oynatmayı geciktirmez.
+  - Eşleşme sonradan bulunursa değerler `setRate` ve `setSubtitleDelay` ile geç uygulanır (nadir).
+  - Jellyfin ve Plex'te digest kullanılmaz; sunucu kimliği yeterlidir.
+- **Bookmark kimlik değildir.** Security-scoped yer imi yalnızca **erişim** içindir ve `Source`/`MediaFile` kaydında saklanır. Gerekçeler: çözümlemede yenilenebilir (stale), SMB ve HTTP'de yoktur.
+- **`modifiedAt` anahtarın parçası değildir.** Etiket düzenleme (ör. `mkvpropedit`) tercihleri kaybettirmemelidir. Bu alan yalnızca TechProfile önbelleğini geçersiz kılar. Tasarım §2.3'teki "değişme zamanı" anahtar parçası buna göre düzeltilmeli **[tasarım ajanına not]**.
+- **Parça kimliği (`trackID`)** konteyner parça numarasıdır (MKV `TrackNumber`, MP4 `track_ID`, M2TS PID), oturumdan oturuma kararlıdır. Ek olarak `trackSignature` (codec | dil | başlık özeti) saklanır; dosya yeniden remux edilip numaralar değişirse eşleme bununla yapılır.
+
+**Şema (SwiftData; CloudKit uyumlu):** Benzersizlik kısıtı yok, bütün öznitelikler varsayılanlı ya da isteğe bağlı, ilişkiler isteğe bağlı. Çoğaltmaları depo birleştirir; en son `updatedAt` kazanır.
+
+```swift
+@Model final class MediaFileRecord {            // Library'deki MEDIA_FILE; kimlik alanları
+    var sourceID: UUID?
+    var locatorKey: String = ""
+    var size: Int64 = 0
+    var modifiedAt: Date?                        // yalnızca önbellek geçersizleme
+    var contentDigest: String?
+    @Relationship(deleteRule: .cascade) var preference: FilePreference?
+}
+@Model final class FilePreference {
+    var rememberRate: Bool = false
+    var rate: Double?                            // yalnızca rememberRate açıkken
+    @Relationship(deleteRule: .cascade, inverse: \SubtitleDelayPref.preference)
+    var subtitleDelays: [SubtitleDelayPref]? = []
+    var updatedAt: Date = Date.now
+    var file: MediaFileRecord?
+}
+@Model final class SubtitleDelayPref {
+    var trackID: Int = 0                         // konteyner parça numarası
+    var trackSignature: String = ""
+    var delayMs: Int = 0                         // 0 saklanmaz
+    var preference: FilePreference?
+}
+@Model final class ContentOverride {             // Film / bölüm düzeyi
+    var contentKey: String = ""                  // "tmdb:movie:<id>", "tmdb:tv:<id>:s<n>e<m>"; TMDB yoksa "file:<digest>"
+    var audioTrackSignature: String?
+    var subtitleTrackSignature: String?          // "" = kullanıcı "kapalı" seçti
+    var boostPercent: Double?
+    var boostRouteClass: String?                 // içerik boost'u yalnızca bu rota sınıfında
+    var updatedAt: Date = Date.now
+}
+```
+
+**iCloud senkronu kapsamı.** Tek kapsayıcıda iki `ModelConfiguration` kullanılır: CloudKit'li "synced" ve CloudKit'siz "local".
+
+| Veri | Senkron | Neden |
+|---|---|---|
+| İzleme durumu (devam konumu) | Evet | M8 |
+| `ContentOverride` | Evet | TMDB anahtarıyla cihazdan bağımsız anlamlı |
+| `FilePreference`, `SubtitleDelayPref`, `MediaFileRecord` kimlik alanları | Evet | Yol cihaza göre değişebilir; digest değişmez. Tek cihazda bile yeniden kurulumda tercihler korunur. |
+| TechProfile ve poster önbelleği | Hayır ("local") | Yeniden üretilebilir ve büyük |
+| Kaynak kimlik bilgileri | Hayır (Keychain) | Güvenlik |
+| `AppSettings` | Hayır (MVP). v1.1'de `NSUbiquitousKeyValueStore` adayı. | Basitlik |
+| Cihaz kalibrasyonu (`b_k`, `S(b)`) | **Asla** | Panele ve cihaza özgü |
+
+- SwiftData + CloudKit kısıtları (benzersizlik kısıtı yok; isteğe bağlı ilişkiler) bilinen kısıtlardır; iOS 27'deki durumu S8'de denenir **[doğrulanmalı]**.
+- Çakışmada en son yazan kazanır (`updatedAt`).
+- "Dosyaya özel kayıtlar > Hepsini sil" (tasarım §2.5) `FileStateRepository.deleteAll(kind:)` ile yapılır.
 
 ### Tasarımda "bilinçli olarak tasarlanmayanlar" listesine not
 

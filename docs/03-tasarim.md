@@ -9,7 +9,7 @@
 > - `docs/02-cozum.md` (teknik çözüm): özellikle §3.5.1 (sahne bazlı `L_ref`), §4.10 (oynatma hızı), §4.11 (elle altyazı gecikmesi), §10.1 (S0 ve "S0 v0.1 uygulama notu") ve §14 (G-01…G-20 yanıtları, `PlaybackEngine` olay sözleşmesi).
 >
 > **Rev. 2'de değişenler (uyum turu):**
-> - §11 artık "çözüldü" tablosudur; her G maddesinin kararı ilgili tasarım bölümüne işlendi. Yeni açık noktalar §11.2'de (G-21…G-24).
+> - §11 artık "çözüldü" tablosudur; her G maddesinin kararı ilgili tasarım bölümüne işlendi. §11.2'deki G-21…G-24 de çözüldü (02-cozum §14); tasarımdaki ilgili işaretler güncellendi.
 > - Yeni MVP arayüzleri: **oynatma hızı** (§4.15) ve **elle altyazı gecikmesi** (§4.16).
 > - Akışlar: Jellyfin Quick Connect (§3.2.2), Plex web + PIN ve kod yedeği (§3.2.3).
 > - §9.5 durum modelleri §14'teki motor tipleriyle hizalandı. §9.1'e "v0.1'de uygulanan / v0.2'ye kalan" tablosu eklendi.
@@ -213,7 +213,7 @@ erDiagram
 | **Sanatçı → Albüm → Parça** | Etiketler (Vorbis comment / ID3 / MP4), disk no, ReplayGain, kapak | `Library` |
 | **İzleme durumu** | Konum, tamamlandı mı, güncelleme zamanı. CloudKit ile senkronlanır. | M8 |
 | **İçerik geçersiz kılma** | Seçilen ses ve altyazı parçası (kullanıcı değiştirdiyse), "bu film için" boost değeri | M10 (K-26), S1 |
-| **Dosya tercihi** (rev. 6) | Anahtar: dosya kimliği (kaynak + yol + boyut + değişme zamanı; taşınan dosya için ilk ve son 1 MB'ın SHA-256 özeti). Alanlar: hatırlanan oynatma hızı (yalnızca "Bu dosyada hızı hatırla" açıksa), **altyazı parçası başına gecikme** (ms; 0 dışındaki her değer kendiliğinden saklanır) | 02-cozum §4.10, §4.11 (`Library`, SwiftData) |
+| **Dosya tercihi** (rev. 6) | Anahtar: dosya kimliği (konum anahtarı + boyut; bulunamazsa ilk ve son 1 MiB + boyuttan içerik özeti). Değişme zamanı anahtara girmez; bookmark yalnızca erişim içindir (02-cozum §14, G-24). Alanlar: hatırlanan oynatma hızı (yalnızca "Bu dosyada hızı hatırla" açıksa), **altyazı parçası başına gecikme** (ms; 0 dışındaki her değer kendiliğinden saklanır) | 02-cozum §4.10, §4.11 (`Library`, SwiftData) |
 | **Rota tercihi** | Rota sınıfı (hoparlör / kulaklık ve BT / AirPlay / USB DAC) başına boost yüzdesi | K-26 |
 
 **Sürüm seçimi kuralı (sıfır ayar):** Bir filmin birden çok dosyası varsa varsayılan olarak bu cihazda oynayabilen en sadık sürüm seçilir: DV > HDR10 > HLG > SDR, aynı sınıfta yüksek çözünürlük ve kayıpsız ses önce. 4K AV1 gibi oynatılamayan sürümler elenir. Kullanıcı detay ekranında sürümü değiştirebilir; seçim içerik geçersiz kılması olarak saklanır.
@@ -271,7 +271,7 @@ Ayarlar
 │  │  ├─ USB DAC ................ [%100]
 │  │  └─ İçeriğe özel değerleri sıfırla
 │  ├─ Limiter ................... [Açık]
-│  └─ Uzman ▸                     (Limiter kipi dışındaki satırlar G-22 komutlarına bağlı; §11.2)
+│  └─ Uzman ▸                     (uzman komutları: 02-cozum §14, G-22)
 │     ├─ Limiter kipi ........... [Akıllı] · Yalnızca limiter · Kapalı
 │     ├─ Agresif yükseltme ...... [Kapalı]  (hedef −7 LUFS)
 │     ├─ Atmos'u koru ........... [Kapalı]  "Açıkken Atmos içerikte boost %100'de kalır."
@@ -859,7 +859,7 @@ Hareket tanıyıcılar UIKit'te kurulur (§9.6): tek ve çift dokunuş ayrımı 
 | 10-bit kaynak, bant dedektörü tetiklenmedi (`cleanNitActive == false`) | A/B ve Bant haritası satırları | Temiz Nit satırında: "Bu kaynakta bant düzeltmesi gerekmiyor (10-bit)." Bit derinliği `TechProfile`'dan okunur. |
 | Referans beyaz = Sabit 203 ya da Elle | Sapma sınırı | — |
 | Hız 1× değil | Kesin kadans **devre dışı** (gizlenmez) | "Kesin kadans yalnızca 1×'te çalışır." (02-cozum §4.10) |
-| Yanıp Sönen Işıkları Azalt açık ve Nit uyguluyor | — | Şu an bölümünde nötr satır: "Yanıp Sönen Işıkları Azalt uygulanıyor" (§7.6). Durumun motordan okunması **[G-23]**. |
+| Yanıp Sönen Işıkları Azalt açık ve Nit uyguluyor | — | Şu an bölümünde nötr satır: "Yanıp Sönen Işıkları Azalt uygulanıyor" (§7.6). Durum motordan okunur: `DisplaySnapshot.flashingLights` (02-cozum §14, G-23). |
 
 **Headroom durum satırı (C-12'nin altı):**
 
@@ -958,7 +958,7 @@ Kırmızı bu satırda kullanılmaz. Kırmızı yalnızca hata ve kırpma için 
 ╰────────────────────────────────────────────────────╯
 ```
 
-Uzman satırlarından Agresif yükseltme, Atmos'u koru, Bluetooth gecikmesi, Stereoyu uzamsallaştır ve LFE'yi stereoya kat 02-cozum'da tanımlı (§5.3, §5.5, §5.7), ama §14'teki `EngineCommand` listesinde komutları ve `AudioSnapshot`'ta değerleri yok **[G-22]**. Teknik çözüm var, eksik olan sözleşmedir. Sprint 2'de komutlar eklenince bağlanırlar; eklenmezse kapsam kuralı gereği ekrana girmezler. Limiter kipi (`setLimiter`) ve Ölçeri sabitle (yalnızca arayüz) etkilenmez.
+Uzman satırlarından Agresif yükseltme, Atmos'u koru, Bluetooth gecikmesi, Stereoyu uzamsallaştır ve LFE'yi stereoya kat 02-cozum'da tanımlı (§5.3, §5.5, §5.7), ve §14'te komutları (`setAggressiveBoost`, `setPreserveAtmos`, `setBluetoothDelay`, `setSpatializeStereo`, `setLFEToStereo`) ile `AudioSnapshot` alanları tanımlıdır (G-22). Elle Bluetooth gecikmesi cihaz başına saklanır (`RouteInfo.deviceUID`). Limiter kipi (`setLimiter`) ve Ölçeri sabitle (yalnızca arayüz) etkilenmez.
 
 **Limiter kapalı iken limiter bölümü:**
 
@@ -998,7 +998,7 @@ Uzman satırlarından Agresif yükseltme, Atmos'u koru, Bluetooth gecikmesi, Ste
 | N-9 | Native Atmos + hız 1× değil (rev. 6) | amber | "Atmos → 7.1 PCM (hız nedeniyle). Nesneler kaybolur; 1×'e dönünce Atmos geri gelir." |
 | N-10 | Hız 1×'ten düşük (rev. 6) | nötr | "Yavaş hızda ses ayarları biraz gecikmeli duyulur." (Geç evrenin ufku medya zamanındadır; 0,5×'te ≈ 0,4 sn; 02-cozum §4.10) |
 
-N-1…N-7 motorun `AudioNotice` listesinden gelir (`audioNoticesChanged`, her zaman tam liste). N-8…N-10 için `AudioNotice`'te durum yok; arayüz bunları şimdilik `EngineState.rate`, `AudioSnapshot.atmosNative`, `RouteInfo.routeClass` ve `atmosDecodedToPCM(reason: .playbackRate)` olayından türetir **[G-22]**.
+N-1…N-10'un hepsi motorun `AudioNotice` listesinden gelir (`audioNoticesChanged`, her zaman tam liste); N-3 ile N-8 tek notta birleşti (02-cozum §14, G-22).
 
 **Kırpma LED'i panel dışında:** Limiter kapalıyken ve kontroller görünürken alt şeritteki **Ses** düğmesinin sağ üstünde 6 pt'lik kırmızı nokta, kırpma olduğunda 500 ms yanar. Kontroller gizliyken sürekli izlemek isteyen kullanıcı Uzman'da **Ölçeri sabitle**'yi açar: sağ üstte küçük bir ölçer adacığı (C-22b) kalır. Bu adacık mikro kaydırılır (§4.13).
 
@@ -1175,7 +1175,7 @@ N-1…N-7 motorun `AudioNotice` listesinden gelir (`audioNoticesChanged`, her za
 │ GPU        p50 2,4 ms · p95 2,9 ms · bütçe 4,5 ms           │
 │ Kareler    düşen 0 · kadans 3:2 · sapma 0,4 ms              │
 │ Hız        1,5× · sunum 35,96 fps · kalıp 2-2-1 · atlanan 0 │  yalnızca 1× dışında
-│ Erişilebilirlik  Yanıp Sönen Işıkları Azalt uygulanıyor     │  yalnızca ayar açıkken [G-23]
+│ Erişilebilirlik  Yanıp Sönen Işıkları Azalt uygulanıyor     │  yalnızca ayar açıkken (G-23)
 │ ── Video ────────────────────────────────────────────────  │
 │ HEVC Main10 L5.1 · 3840×2160 · 23,976 · 10-bit 4:2:0        │
 │ BT.2020 · PQ · sınırlı aralık · MaxCLL 1000 · MaxFALL 400   │
@@ -1202,7 +1202,7 @@ N-1…N-7 motorun `AudioNotice` listesinden gelir (`audioNoticesChanged`, her za
 ╰─────────────────────────────────────────────────────────────╯
 ```
 
-**Veri kaynakları:** Zincir satırları ve Görüntü, Ses, Altyazı bölümlerinin durum alanları `EngineState` ve olaylardan gelir (02-cozum §14). GPU süreleri, düşen ve atlanan kareler, kadans ve sunum kalıbı, bit hızı, tampon, çözücü adı, Temiz Nit kazancı ve 1× dışındaki TP tavanı §14 sözleşmesinde yok. Bu alanlar için 2 Hz'lik bir istatistik akışı istendi **[G-21]**. Akış gelene kadar bu satırlar Bilgi panelinde gösterilmez; Laboratuvar'daki karşılıkları telemetriden okunur.
+**Veri kaynakları:** Zincir satırları ve Görüntü, Ses, Altyazı bölümlerinin durum alanları `EngineState` ve olaylardan gelir (02-cozum §14). GPU süreleri, düşen ve atlanan kareler, kadans ve sunum kalıbı, bit hızı, tampon, çözücü adı, Temiz Nit kazancı ve 1× dışındaki TP tavanı 2 Hz'lik `stats()` akışından (`StatsSnapshot`) gelir; akış yalnızca Bilgi ya da sabitlenmiş katman görünürken açıktır (02-cozum §14, G-21).
 
 **(b) Sabitlenmiş katman (C-22):** Bilgi panelinin en üstündeki "Oynatırken göster" anahtarıyla açılır. Varsayılan kapalıdır. Sol üstte (yatayda x = 52, y = 8; kontroller görünürken üst şeridin altına iner), opak adacık içinde 6 satır gösterir:
 
@@ -1413,9 +1413,9 @@ AS-39 native Atmos yolunun hızla doğru çalıştığını gösterirse (02-cozu
 | Sonraki bölüm kartı (C-24) | Kart gerçek zamanda bitişten 10 sn önce çıkar (kalan medya süresi ≤ 10 sn × hız). Geri sayım halkası 10 gerçek saniyedir. |
 | Kesin kadans | 1× dışında devre dışı (Görüntü paneli). |
 | Diyalog | 2×'te bütçe aşılırsa yöntem F1'e geçer; düğme ve kademe değişmez, neden Bilgi'de (§3.5, adım 6b). |
-| Boost ve limiter | 1×'ten yavaşta ayar değişiklikleri gecikmeli duyulur (N-10). AS-39 gerektirirse 1× dışında TP tavanı −1,5 dBTP olur; Bilgi > Limiter satırında yazar **[G-21]**. |
+| Boost ve limiter | 1×'ten yavaşta ayar değişiklikleri gecikmeli duyulur (N-10). AS-39 gerektirirse 1× dışında TP tavanı −1,5 dBTP olur; Bilgi > Limiter satırında yazar (`StatsSnapshot`, G-21). |
 | Altyazı | Medya zamanına bağlı olduğu için hızla kendiliğinden ölçeklenir. Elle gecikme değeri hız değişince korunur (§4.16). |
-| Yazılım çözücü (AV1, VC-1, MPEG-2), 2× | Çözücü yetişmezse sunum kareleri atlanır; ses kesilmez. Bilgi > Hız satırında "atlanan N" **[G-21]**. |
+| Yazılım çözücü (AV1, VC-1, MPEG-2), 2× | Çözücü yetişmezse sunum kareleri atlanır; ses kesilmez. Bilgi > Hız satırında "atlanan N" (`StatsSnapshot`, G-21). |
 
 **Erişilebilirlik:**
 - **Segment:** VoiceOver'da tek ayarlanabilir öğe. Etiket "Oynatma hızı", değer "1,5 kat". Yukarı ve aşağı kaydırma bir kademe değiştirir.
@@ -1484,7 +1484,7 @@ x: 0  44                                             428                768 812
 - Çıkış: [Bitti] ya da 4 sn etkileşimsizlik → panel tam haline döner (`motion.standard`; Reduce Motion'da çapraz geçiş). Videoya tek dokunuş paneli tamamen kapatır (§4.2).
 - Dikeyde odak kipi yoktur: panel alttadır, video üste kaymıştır ve altyazı görünür.
 
-**Kayıt zamanı:** Arayüz `subtitleDelayChanged` olayını alınca değeri `Library`'ye yazar. Basılı tutarken her adımda yazmaz; bırakınca ya da 500 ms durgunluktan sonra yazar. Kalıcılığın sahibinin arayüz (`Library`) olduğu varsayıldı **[G-24]**.
+**Kayıt zamanı:** Arayüz `subtitleDelayChanged` olayını alınca değeri `Library`'ye yazar. Basılı tutarken her adımda yazmaz; bırakınca ya da 500 ms durgunluktan sonra yazar. Kalıcılığın sahibi uygulama tarafıdır (`Library`, köprü `FilePreferencesStore`); kayıtlı değer bir sonraki açılışta `open(_, options:)` ile ilk kareden önce uygulanır (02-cozum §14, G-24).
 
 **HUD (§4.8):** HUD-19 (kayıtlı gecikmeyle açılış: "Bu dosya için kayıtlı: altyazı +250 ms" [Sıfırla]); HUD-21 (panel kapalıyken klavyeyle değişim).
 
@@ -2026,7 +2026,7 @@ Sınırlar §6.3'te. Ek kurallar:
 | Ayar açık, Nit uygulayamıyor (`canProcessSurface` false; geniş aralıklı doğrusal P3 yüzeyi desteklenmezse) | Uygulamanın ilk video oynatmasında, video başlamadan tek seferlik kart: "Yanıp Sönen Işıkları Azalt açık. Nit bu ayarı uygulayamıyor. Varsayılan modu Referans yapmak ister misin?" Eylemler: [Referans yap] [Nit'te kal]. Yanıt verilince oynatma başlar. HUD-15 karttan sonra gelir; ikisi aynı anda görünmez. Kararı kullanıcı verir; uygulama modu kendiliğinden değiştirmez. |
 | Referans yolu | AVFoundation yolunun ayarı kendiliğinden uyguladığı varsayılır **[doğrulanmalı, AS-31]**. Varsayım çürürse karttaki öneri "Referans yap" yerine yalnızca bilgi verir: "Bu ayar bu uygulamada uygulanamıyor." |
 
-Arayüzün durumu (uygulanıyor / Nit'te uygulanamıyor) motordan okuyabilmesi için bir alan gerekir; §14 sözleşmesinde yok **[G-23]**.
+Arayüzün durumu (uygulanıyor / Nit'te uygulanamıyor) motordan okuyabilmesi için bir alan gerekir; bu alan `DisplaySnapshot.flashingLights`'tır (`.settingOff`, `.appliedInNit`, `.unavailableInNit`, `.systemPath`; 02-cozum §14, G-23). Kart video başlamadan `nitSupportsFlashingLightsMitigation()` ile gösterilebilir.
 
 ### 7.7 Klavye, Switch Control ve dokunma hedefleri
 
@@ -2559,11 +2559,11 @@ Bileşenler `DesignSystem` paketindedir (§9.7). Her biri Tasarım Kataloğu'nda
 | `DisplayState.nitAvailability` | `DisplaySnapshot.nitUnavailableReason: AutoReferenceReason?` | — |
 | `hdrCurve: HDRCurve` | `curve: HDRCurve?` | SDR'da `nil`; eğri segmenti gizlenir |
 | `DisplayState.status` | `HeadroomSnapshot.status` | 10 Hz akıştan; yalnızca görünürken abone olunur |
-| `cleanNit: CleanNitState` | `cleanNitActive: Bool` + `expert.cleanNit: CleanNitMode` | Etkin olmama nedeni (10-bit) `TechProfile`'dan; kazanç **[G-21]** |
+| `cleanNit: CleanNitState` | `cleanNitActive: Bool` + `expert.cleanNit: CleanNitMode` | Etkin olmama nedeni (10-bit) `TechProfile`'dan; kazanç `StatsSnapshot.cleanNit.amplification` (G-21) |
 | arayüz `DisplayExpert` | motor `DisplayExpert`: `maximumWhite`, `sdrGamma`, `cleanNit`, `dither`, `exactCadence`, `sceneDeviationStops` | Referans beyaz kipi ayrı alandır: `sceneWhiteMode` |
 | `AudioState.boost: BoostState` | `AudioSnapshot.boostPercent`; rota sınıfı `route.routeClass` | dB değeri arayüz yardımcısıdır |
 | `BoostState.lockedByAtmosPreserve` | `notices.contains(.atmosPreservedBoostLocked)` | — |
-| `BoostState.rememberForContent` | Snapshot'ta yok | Arayüz kopyası tutulur **[G-22, G-24]** |
+| `BoostState.rememberForContent` | `AudioSnapshot.boostScope == .content` | Arayüz kopyası gerekmez (G-22, G-24) |
 | `SubtitleState` | `SubtitleSnapshot` (+ `delay`, `pgsScale`) | — |
 | — | `EngineState.rate` (rev. 6) | Hız rozeti, segment, bitiş saati |
 
@@ -2583,14 +2583,13 @@ final class PlayerViewModel {
     var lock = LockState()
     var hud = HUDQueue()                           // HUD'un sahibi arayüz; metinler DSCore.HUDCatalog
     var system = SystemContext()                   // PiP, dış ekran, ekran kaydı (olaylardan)
-    var filePrefs = FilePreferences()              // hatırlanan hız, parça başına gecikme (Library) [G-24]
-    var rememberBoostForContent = false            // snapshot'ta yok [G-22]
+    var filePrefs = FilePreferences()              // hatırlanan hız, parça başına gecikme (Library; FilePreferencesStore köprüsü, G-24)
 
     // Ayrı gözlemlenen yüksek frekanslı modeller (§8.4)
     let clock: ClockModel                          // ClockSnapshot; 1 Hz, sararken 60 Hz
     let headroom: HeadroomModel                    // HeadroomSnapshot; 10 Hz, yalnızca görünürken
     let meters: MeterModel                         // MeterSnapshot; 30 Hz, yalnızca görünürken
-    // let stats: StatsModel                       // 2 Hz Bilgi istatistikleri; sözleşme gelince [G-21]
+    let stats: StatsModel                          // StatsSnapshot; 2 Hz, yalnızca Bilgi ya da sabitlenmiş katman görünürken (G-21)
 
     private let player: PlaybackEngine
 
@@ -2606,7 +2605,7 @@ extension PlayerViewModel {
     var audio: AudioSnapshot? { engine?.audio }
     var subtitles: SubtitleSnapshot? { engine?.subtitles }
     var format: FormatChain { /* DSCore.ChainFormatter(engine, item?.techProfile); §4.7 */ .empty }
-    var audioNotes: [AudioNote] { /* N-1…N-7 notices'ten; N-8…N-10 rate, route ve atmosNative'den [G-22] */ [] }
+    var audioNotes: [AudioNote] { /* N-1…N-10 motorun notices listesinden (G-22) */ [] }
 }
 
 struct PendingValues {                              // gönderilmiş, EngineState'e henüz yansımamış
@@ -2647,9 +2646,9 @@ enum PlayerIntent {
     case stepSubtitleDelay(by: Duration)           // ±50 / ±250 ms, aralığa kırpılır → .setSubtitleDelay
     case resetSubtitleDelay                        // → .setSubtitleDelay(.zero); kayıt silinir
     case startAB, endAB                            // → .setABSplit(0.5), .setABSplit(nil)
-    case setRememberBoostForContent(Bool)          // → .setRememberBoostForContent + arayüz kopyası
+    case setRememberBoostForContent(Bool)          // → .setRememberBoostForContent; durum AudioSnapshot.boostScope (G-24)
     // Yalnızca arayüz
-    case setRememberRate(Bool)                     // FilePreferences [G-24]
+    case setRememberRate(Bool)                     // FilePreferences; FilePreferencesStore yazar (02-cozum §14 G-24)
     case resetFileRecords                          // HUD-19 [Sıfırla]: 1× ve 0 ms, bu dosyanın kayıtları silinir
     case toggleChrome, showPanel(PlayerPanel?, scrollTo: PanelSection?)
     case setFocus(PanelFocus?), lock, unlock, close
@@ -2673,6 +2672,7 @@ extension HUDKind {
 @MainActor @Observable final class ClockModel    { var value: ClockSnapshot? }     // position, duration, rate, bufferedAhead
 @MainActor @Observable final class HeadroomModel { var value: HeadroomSnapshot? }  // H değerleri, parlaklık, status
 @MainActor @Observable final class MeterModel    { var value: MeterSnapshot? }     // GR, kırpma, TP aşımı
+@MainActor @Observable final class StatsModel    { var value: StatsSnapshot? }     // G-21: GPU, kareler, bit hızı, çözücü, TP tavanı
 
 // Arayüz yardımcıları
 extension AudioSnapshot {
@@ -2694,7 +2694,7 @@ final class MusicPlayerModel {
     var loudness: LoudnessMode = .auto       // .off, .auto (USB DAC'ta varsayılan .off; G-12)
     var boostPercent: Double = 100           // rota başına hatırlanır (K-26)
     var limiter: LimiterMode = .smart
-    var spatializeStereo = false             // komutu [G-22]
+    var spatializeStereo = false             // komut: setSpatializeStereo (G-22)
     // Oynatma hızı yok (MVP; 02-cozum §4.10)
 }
 
@@ -2834,7 +2834,7 @@ Packages/
 - `App/Features` yalnızca `PlaybackEngine`'in kamuya açık yüzünü (`PlayerIntent`, anlık görüntü akışları, `VideoOutput`), `Library`, `Sources` ve `DesignSystem`'i içe aktarır. `NitCore`, `AudioCore` ve `DSPKit` arayüzden doğrudan çağrılmaz.
 - `DesignSystem` hiçbir motor modülüne bağlı değildir. Bu sayede Tasarım Kataloğu motor olmadan çalışır.
 - **`Diagnostics` arayüzsüzdür** (G-19, K-32): telemetri, CSV, `OSLogStore` ve MetricKit. Laboratuvar ekranları `App/Features/Lab`'da, HUD bileşenleri `DesignSystem`'dedir.
-- **Dosya tercihleri** (hatırlanan hız, altyazı gecikmesi) `Library`'nin SwiftData modelindedir. `PlaybackEngine` `Library`'yi içe aktarmaz; köprü `Player/FilePreferencesStore`'dur **[G-24]**.
+- **Dosya tercihleri** (hatırlanan hız, altyazı gecikmesi) `Library`'nin SwiftData modelindedir. `PlaybackEngine` `Library`'yi içe aktarmaz; köprü `Player/FilePreferencesStore`'dur (G-24). Rota boost'u ve uzman ayarları ise `AppSettings`'te (UserDefaults) tutulur.
 - Modül sayısı 15 + 1 = 16; XcodeGen'in yeniden değerlendirme eşiği olan 25'in altında (K-19).
 
 ### 9.8 İlk üç sprint: ekran bazlı kapsam
@@ -2866,9 +2866,9 @@ Sprint süresi 2 haftadır. Sprintler 02-cozum §10.2'deki spike sırasına hiza
 | E-20 Kaynaklar (kısmi) + E-28 | Dosyalar, iPhone'umda, Son açılanlar | — |
 | **E-30 Oynatıcı** | Yatay ve dikey yerleşim, bütün hareketler (Altyazı düğmesine basılı tutma dahil), üst ve alt şerit, bölüm işaretli zaman çizgisi, mod anahtarı, format çipi, hız rozeti (C-33), görünürlük kuralları, kilit (E-36), döndürmede siyah karesiz geçiş (G-18) | S2 (MKV, DV) |
 | **E-31 Görüntü paneli** | Tamamı, Uzman ve A/B (E-39) dahil; sahne beyazı satırı ve gösterim kuralları (§4.4, G-01) | S0, S0b, S1, S2 |
-| **E-32 Ses paneli** | Tamamı: Diyalog, boost, limiter ve ölçer, notlar N-1…N-10, gece modu, parçalar, Uzman (G-22'ye bağlı satırlar komutlar gelince) | S3, S4, S5 |
+| **E-32 Ses paneli** | Tamamı: Diyalog, boost, limiter ve ölçer, notlar N-1…N-10, gece modu, parçalar, Uzman (G-22 komutlarıyla) | S3, S4, S5 |
 | **E-33 Altyazı paneli** | Parçalar (VobSub dahil), **gecikme (C-34) ve odak kipi**, parlaklık, siyah banda taşıma (bütün biçimler), PGS/VobSub boyutu | S10 (AS-39 c) |
-| E-34 Bilgi paneli + sabitlenmiş katman | Zincir ve durum satırları; istatistik satırları G-21'e bağlı | — |
+| E-34 Bilgi paneli + sabitlenmiş katman | Zincir ve durum satırları; istatistik satırları `stats()` akışından (G-21) | — |
 | **E-35 Diğer paneli** | **Oynatma hızı** (7 kademe, sıfırlama, N-8/N-9 notları, "Bu dosyada hızı hatırla"), bölümler, başlıklar, görüntü oranı, teşhis | S10 (AS-39 a, b) |
 | HUD sistemi | HUD-01…HUD-15 ve HUD-18…HUD-21; kuyruk, tekrar sınırları ve olay eşlemesi (§4.8) | — |
 | E-50, E-51, E-52, E-54, E-55, E-56 | Ayarlar: Görüntü, Ses, Oynatma, Uzman (Laboratuvar buraya taşınır), Hakkında ve Lisanslar | — |
@@ -2954,16 +2954,16 @@ Rev. 1'deki 20 maddenin hepsi 02-cozum §14'te yanıtlandı. Her kararın tasar�
 
 **"Bilinçli olarak tasarlanmayanlar" listesinden çıkanlar (rev. 6, kullanıcı onaylı):** Oynatma hızı (§4.15) ve elle altyazı gecikmesi (§4.16) artık MVP'dedir; motor tarafı hazırdır (`setRate`, `setSubtitleDelay`, `playbackRateChanged`, `subtitleDelayChanged`, Now Playing `changePlaybackRate`). 02-cozum'un önerdiği yerler kullanıldı: hız Diğer panelinde, gecikme Altyazı panelinde.
 
-### 11.2 Rev. 2'de açılan geri bildirimler
+### 11.2 Rev. 2'de açılan geri bildirimler: çözüldü
 
-Bunlar yeni özellik değil, §14 sözleşmesindeki boşluklardır. Tasarım geçici çözümünü yazdı; çözülmeyen satırlar kapsam kuralı gereği ekrana girmez.
+Dört madde de 02-cozum §14'te kapatıldı. Kararların tasarımın ilgili bölümlerine işlenmesi tasarım ajanının bir sonraki turundadır. Bu tabloda yalnızca karar ve referans var.
 
-| # | Konu | İstek | Gelene kadar tasarım ne yapar? | Tasarımda bağlı yer |
+| # | Konu | Durum | Çözüm ajanının kararı | 02-cozum |
 |---|---|---|---|---|
-| G-21 | **Bilgi istatistik akışı** | 2 Hz'lik bir `stats()` akışı ya da `StatsSnapshot`: GPU p50/p95, düşen kare, hız için atlanan kare, kadans ve sunum kalıbı, ortalama ve anlık bit hızı, tampon (MB ve sn), çözücü adı, Temiz Nit kazancı, etkin TP tavanı (1× dışında −1,5 dBTP olabilir), zaman-perde algoritması. Yalnızca abone varken üretilsin. | Bu satırlar Bilgi panelinde ve sabitlenmiş katmanda gösterilmez. Laboratuvar telemetriden okur. | §4.9, §4.15, §9.5 `StatsModel` |
-| G-22 | **Eksik uzman komutları ve notlar** | `EngineCommand`'a: Atmos'u koru, Agresif yükseltme, LFE'yi stereoya kat, Stereoyu uzamsallaştır, Bluetooth gecikmesi (otomatik / elle ±500 ms) ve zaman-perde algoritması (`varispeed` uzman seçeneği; 02-cozum §4.10). `AudioSnapshot`'a bunların değerleri ve "bu film için boost hatırla" durumu. `AudioNotice`'e hız için durumlar: `atmosDecodedForRate` ve `notBitPerfect`'in nedeninde hız (ör. `notBitPerfect(reasons:)`). | Uzman satırları ekrana girmez (§4.5). N-8…N-10 arayüzde `rate`, `route`, `atmosNative` ve `atmosDecodedToPCM(reason: .playbackRate)` olayından türetilir. Varispeed seçeneği yoktur. | §4.5, §4.15, §5.4, §9.5 |
-| G-23 | **Yanıp Sönen Işıkları Azalt durumu** | `DisplaySnapshot`'a bir alan: ayar kapalı / Nit'te uygulanıyor / Nit'te uygulanamıyor (`canProcessSurface` false). | Görüntü ve Bilgi'deki "uygulanıyor" satırı gösterilmez. Kart, `MADimFlashingLightsEnabled()` açıkken ve motor "uygulanamıyor" diyene kadar gösterilmez. | §4.4, §4.9, §7.6 |
-| G-24 | **Dosya bazlı kalıcılığın sahibi** | Hatırlanan hız, parça başına altyazı gecikmesi ve "bu film için" boost kim tarafından saklanır ve yüklenir? Tasarım varsayımı: `Library` (arayüz tarafı) saklar; arayüz açılışta `setRate`, parça seçiminde `setSubtitleDelay` gönderir; `subtitleDelayChanged` olayında yazar. `setRememberBoostForContent` komutunun motor tarafındaki anlamı da netleşsin. | Varsayımla tasarlandı (`FilePreferencesStore`, §9.7). | §2.3, §4.15, §4.16, §9.5, §9.7 |
+| G-21 | **Bilgi istatistik akışı** | **Çözüldü** | Altıncı akış `stats()` → `StatsSnapshot`, 2 Hz, yalnızca abone varken. Alanlar: GPU p50/p95 ve bütçe (`gpuBudgetIncludesAccessibility` dahil), düşen kare, hız için atlanan kare, `CadencePattern`, sunum sapması p95, ortalama ve anlık bit hızı, tampon (bayt ve sn), video ve ses çözücüsü (`DecoderKind`), Temiz Nit (`mode`, `amplification` "×11,8", düzeltilen karo oranı), etkin TP tavanı, zaman-perde algoritması, bellek. Bilgi satırı ↔ alan eşlemesi tablosu G-21'de. | §14 G-04 (kod), §14 G-21, K-37 |
+| G-22 | **Eksik uzman komutları ve notlar** | **Çözüldü** | `EngineCommand`'a `setAggressiveBoost`, `setPreserveAtmos`, `setLFEToStereo`, `setSpatializeStereo`, `setBluetoothDelay(.automatic / .manual(±500 ms))`, `setTimePitch(.timeDomain / .varispeed)` ve `setRouteBoostTable` eklendi. `AudioSnapshot`'ta bunların değerleri ve `boostScope` (`.route(_) / .content`) var. `AudioNotice` artık N-1…N-10'un hepsini taşır: `notBitPerfect(reasons:)` (N-3 + N-8, nedenler `.boost`, `.playbackRate` …), `atmosDecodedForRate` (N-9), `slowRateDelayedChanges` (N-10). Arayüz N-8…N-10'u türetmez. Elle BT gecikmesi cihaz başına saklanır (`RouteInfo.deviceUID`). "Atmos'u koru" yalnızca boost nedenli PCM'e çözmeyi engeller. | §14 G-04 (kod), §14 G-22, K-38 |
+| G-23 | **Yanıp Sönen Işıkları Azalt durumu** | **Çözüldü** | `DisplaySnapshot.flashingLights: FlashingLightsState` (`.settingOff`, `.appliedInNit`, `.unavailableInNit`, `.systemPath`) ve `flashingLightsChanged` olayı. Kart için oynatma öncesi statik sorgu: `PlaybackEngine.nitSupportsFlashingLightsMitigation()`. Kart koşulu: `MADimFlashingLightsEnabled() && !sorgu`. | §14 G-04 (kod), §14 G-23, K-39 |
+| G-24 | **Dosya bazlı kalıcılığın sahibi** | **Çözüldü** (tasarım varsayımı doğrulandı, ayrıntılar eklendi) | Sahibi uygulama tarafı: `Library` (SwiftData, `FileStateRepository`) + köprü `Player/FilePreferencesStore`. Rota başına boost ve uzman ayarları `AppSettings`'te (UserDefaults), `ROUTE_PREF` SwiftData'da değil. Motor durumsuz. Kayıtlı değerler `open(_, options: OpenOptions)` ile **ilk kareden önce** uygulanır (sonradan `setRate` yok). Yazma olaylardan yapılır: `playbackRateChanged`, `subtitleDelayChanged(trackID:delay:)`, `trackSelectionChanged(byUser:)` ve `boostChanged(scope:)`; 500 ms durgunluktan sonra. `setRememberBoostForContent`: `true` → `boostScope = .content`; `false` → rota tablosuna dönüş. İçerik boost'u yalnızca kaydedildiği rota sınıfında geçerli. Dosya kimliği: `locatorKey` + boyut, yedek eşleme `contentDigest` (ilk ve son 1 MiB + boyut). **Değişme zamanı anahtara girmez** (§2.3 düzeltildi). Bookmark yalnızca erişim içindir. Parça kimliği konteyner numarası + imza. iCloud: izleme durumu, içerik geçersiz kılmaları ve dosya tercihleri senkronlanır; önbellekler, kimlik bilgileri ve kalibrasyon yerel kalır. | §14 G-24 (akış, şema), K-40, K-41, K-42 |
 
 **Bilinçli olarak tasarlanmayanlar** (teknik çözümde yok ya da kullanıcı kapsam dışı bıraktı):
 - Altyazı OCR'ı, çevirisi ve otomatik senkronu
