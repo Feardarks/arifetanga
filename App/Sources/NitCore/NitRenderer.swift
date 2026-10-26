@@ -170,6 +170,8 @@ final class NitRenderer {
     private let textureCache: CVMetalTextureCache
     private let dummyLuma: MTLTexture
     private let dummyChroma: MTLTexture
+    /// DV yokken shader'ın `DoviParams` bağlantısı için sıfır dolu tampon.
+    private let doviPlaceholder: MTLBuffer
     private var frameIndex: UInt32 = 0
 
     init?() {
@@ -196,7 +198,10 @@ final class NitRenderer {
             d.usage = .shaderRead
             return device.makeTexture(descriptor: d)
         }
-        guard let dl = dummy(.r8Unorm), let dc = dummy(.rg8Unorm) else { return nil }
+        guard let dl = dummy(.r8Unorm), let dc = dummy(.rg8Unorm),
+              let placeholder = device.makeBuffer(length: DolbyVisionReshape.packedCount * MemoryLayout<SIMD4<Float>>.stride,
+                                                  options: .storageModeShared) else { return nil }
+        placeholder.contents().initializeMemory(as: UInt8.self, repeating: 0, count: placeholder.length)
 
         self.device = device
         self.queue = queue
@@ -206,6 +211,7 @@ final class NitRenderer {
         self.textureCache = cache
         self.dummyLuma = dl
         self.dummyChroma = dc
+        self.doviPlaceholder = placeholder
     }
 
     static func configure(_ layer: CAMetalLayer, device: MTLDevice) {
@@ -246,6 +252,7 @@ final class NitRenderer {
         encoder.setRenderPipelineState(pipeline)
         encoder.setFragmentTexture(dummyLuma, index: 0)
         encoder.setFragmentTexture(dummyChroma, index: 1)
+        encoder.setFragmentBuffer(doviPlaceholder, offset: 0, index: 1)
         var u = NitUniforms()
         u.pattern = SIMD4(Float(PatternKind.pqReference.rawValue), Float(windowFraction), Float(PQ.inverseEOTF(nits)), Float(centerX))
         encoder.setFragmentBytes(&u, length: MemoryLayout<NitUniforms>.stride, index: 0)
@@ -256,6 +263,7 @@ final class NitRenderer {
     }
 
     /// Bir kare çizer. `pattern` verilirse piksel tamponu yok sayılır.
+    /// - Parameter dovi: DV P5 karesinin şekillendirme ve renk parametreleri (S2.4); verilirse kare IPTPQc2 olarak çözülür.
     /// - Returns: Bu karede çıkışın ulaşabileceği en yüksek EDR değeri (analitik; P-2 denetimi için).
     @discardableResult
     func render(layer: CAMetalLayer,
@@ -265,7 +273,8 @@ final class NitRenderer {
                 settings: RenderSettings,
                 headroom: Double,
                 presentAt: CFTimeInterval? = nil,
-                histogramPTS: Double? = nil) -> Double {
+                histogramPTS: Double? = nil,
+                dovi: DoviShaderParams? = nil) -> Double {
         guard let drawable = layer.nextDrawable(),
               let commandBuffer = queue.makeCommandBuffer() else { return 0 }
 
@@ -282,6 +291,7 @@ final class NitRenderer {
         var histogramGrid: MTLSize?
         let drawableSize = CGSize(width: drawable.texture.width, height: drawable.texture.height)
         var isHDR = false
+        var doviPacked: [SIMD4<Float>]?
 
         if let pattern {
             encoder.setFragmentTexture(dummyLuma, index: 0)
@@ -314,6 +324,15 @@ final class NitRenderer {
             setGamut(&u, from: format.primaries)
             isHDR = format.transfer.isHDR
             u.tone = SIMD4(Float(headroom), Float(format.transfer.rawValue), Float(settings.sdrGamma), Float(1 / settings.referenceWhiteNits))
+            if let dovi {
+                // DV P5: çıkış doğrusal BT.2020; doku örneği → kod / 2^bit (10-bit MSB hizalı: 65535/65536).
+                var packed = dovi.packed
+                packed[DolbyVisionReshape.infoIndex].x = format.bitDepth == 10 ? Float(65535.0 / 65536.0) : Float(255.0 / 256.0)
+                doviPacked = packed
+                setGamut(&u, from: .bt2020)
+                isHDR = true
+                u.tone.y = 3
+            }
         } else {
             // Gösterilecek bir şey yok: siyah temizle ve sun.
             encoder.endEncoding()
@@ -328,6 +347,13 @@ final class NitRenderer {
         u.dither = SIMD4(settings.dither ? 1 : 0, Float(pow(2.0, -Double(settings.ditherBits))), Float(frameIndex % 64) * 7.13, 0)
 
         encoder.setFragmentBytes(&u, length: MemoryLayout<NitUniforms>.stride, index: 0)
+        bindDovi(doviPacked) { bytes, length in
+            if let bytes {
+                encoder.setFragmentBytes(bytes, length: length, index: 1)
+            } else {
+                encoder.setFragmentBuffer(doviPlaceholder, offset: 0, index: 1)
+            }
+        }
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         encoder.endEncoding()
 
@@ -345,6 +371,13 @@ final class NitRenderer {
                 compute.setTexture(CVMetalTextureGetTexture(keepAlive[1]), index: 1)
                 compute.setBytes(&u, length: MemoryLayout<NitUniforms>.stride, index: 0)
                 compute.setBuffer(buffer, offset: 0, index: 1)
+                bindDovi(doviPacked) { bytes, length in
+                    if let bytes {
+                        compute.setBytes(bytes, length: length, index: 2)
+                    } else {
+                        compute.setBuffer(doviPlaceholder, offset: 0, index: 2)
+                    }
+                }
                 compute.dispatchThreads(grid, threadsPerThreadgroup: MTLSize(width: 16, height: 16, depth: 1))
                 compute.endEncoding()
                 histogramBuffer = buffer
@@ -376,6 +409,12 @@ final class NitRenderer {
 
         // SDR'da beyaz tam H'ye çıkar; HDR'da eğri 1'e yalnızca asimptotik yaklaşır.
         return isHDR ? headroom * settings.curve(1e4 / settings.referenceWhiteNits) : headroom
+    }
+
+    /// DV parametreleri varsa ham baytlarını, yoksa `nil` verir (çağıran yer tutucuyu bağlar).
+    private func bindDovi(_ packed: [SIMD4<Float>]?, _ body: (UnsafeRawPointer?, Int) -> Void) {
+        guard let packed else { return body(nil, 0) }
+        packed.withUnsafeBytes { raw in body(raw.baseAddress, raw.count) }
     }
 
     func flushCache() {

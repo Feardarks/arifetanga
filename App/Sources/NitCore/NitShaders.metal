@@ -11,10 +11,25 @@ struct NitUniforms {
     float4 gam1;
     float4 gam2;
     float4 curve;    // D, u_k, x_k, g
-    float4 tone;     // H_eff, transfer (0 SDR, 1 PQ, 2 HLG), SDR gaması, 1 / L_ref
+    float4 tone;     // H_eff, transfer (0 SDR, 1 PQ, 2 HLG, 3 DV P5), SDR gaması, 1 / L_ref
     float4 dither;   // açık (0/1), genlik, tohum, -
     float4 pattern;  // tür (0 = video), pencere oranı, seviye (nit ya da PQ kodu), pencere merkezi x
     float4 scaler;   // kalite (0 bilineer, 1 kaliteli), ölçek (hedef/kaynak), 1/hedef genişlik, 1/hedef yükseklik
+};
+
+// Dolby Vision P5 (S2.4): Swift'teki `DolbyVisionReshape.packed` ile birebir aynı düzen (184 × float4).
+struct DoviComponent {
+    float4 pivots[2];   // iç pivotlar (en çok 7), kalanı 1e9
+    float4 coeffs[8];   // parça başına: polinom (a0, a1, a2, 0) ya da MMR (sabit, yuva, 0, derece)
+    float4 range;       // giriş alt / üst sınırı (ilk ve son pivot)
+};
+
+struct DoviParams {
+    DoviComponent comp[3];
+    float4 nonlinear[3];  // IPT → L'M'S' satırları; .w = −satır · ofset
+    float4 linear[3];     // LMS → doğrusal BT.2020 satırları
+    float4 info;          // doku örneği → kod / 2^bit çarpanı
+    float4 mmr[3][48];    // derece başına (x, y, z, 0) ve (xy, xz, yz, xyz)
 };
 
 struct VOut {
@@ -39,6 +54,46 @@ static float pqEOTF(float e) {
     const float c3 = 2392.0 / 4096.0 * 32.0;
     float ep = pow(max(e, 0.0), 1.0 / m2);
     return 10000.0 * pow(max(ep - c1, 0.0) / (c2 - c3 * ep), 1.0 / m1);
+}
+
+// DV P5 (IPTPQc2) → doğrusal BT.2020, nit. libplacebo `pl_shader_dovi_reshape` + DOLBYVISION kod çözümü:
+// her bileşen kendi pivot aralığına kırpılır, parça polinom ya da MMR'dir (MMR üç bileşeni de okur),
+// sonra IPT → L'M'S' → PQ EOTF → LMS → BT.2020. Başvuru: NitMath `DolbyVisionReshape.decode`.
+static float3 doviDecode(float3 sample, constant DoviParams &dv) {
+    float3 lo = float3(dv.comp[0].range.x, dv.comp[1].range.x, dv.comp[2].range.x);
+    float3 hi = float3(dv.comp[0].range.y, dv.comp[1].range.y, dv.comp[2].range.y);
+    float3 sig = clamp(sample * dv.info.x, lo, hi);
+    float4 sigX = float4(sig.xxy * sig.yzz, sig.x * sig.y * sig.z);
+    float3 ipt = float3(0.0);
+    for (int c = 0; c < 3; c++) {
+        float s = sig[c];
+        // Pivotlar sıralı: s'ye eşit ya da küçük iç pivot sayısı parça indeksidir.
+        float4 below0 = select(float4(0.0), float4(1.0), float4(s) >= dv.comp[c].pivots[0]);
+        float4 below1 = select(float4(0.0), float4(1.0), float4(s) >= dv.comp[c].pivots[1]);
+        int piece = min(int(dot(below0, float4(1.0)) + dot(below1, float4(1.0))), 7);
+        float4 k = dv.comp[c].coeffs[piece];
+        float r;
+        if (k.w == 0.0) {
+            r = (k.z * s + k.y) * s + k.x;
+        } else {
+            int m = int(k.y);
+            r = k.x + dot(dv.mmr[c][m].xyz, sig) + dot(dv.mmr[c][m + 1], sigX);
+            if (k.w >= 2.0) {
+                float3 sig2 = sig * sig;
+                float4 sigX2 = sigX * sigX;
+                r += dot(dv.mmr[c][m + 2].xyz, sig2) + dot(dv.mmr[c][m + 3], sigX2);
+                if (k.w >= 3.0) {
+                    r += dot(dv.mmr[c][m + 4].xyz, sig2 * sig) + dot(dv.mmr[c][m + 5], sigX2 * sigX);
+                }
+            }
+        }
+        ipt[c] = clamp(r, 0.0, 1.0);
+    }
+    float3 lmsSignal = clamp(float3(dot(dv.nonlinear[0].xyz, ipt) + dv.nonlinear[0].w,
+                                    dot(dv.nonlinear[1].xyz, ipt) + dv.nonlinear[1].w,
+                                    dot(dv.nonlinear[2].xyz, ipt) + dv.nonlinear[2].w), float3(0.0), float3(1.0));
+    float3 lms = float3(pqEOTF(lmsSignal.x), pqEOTF(lmsSignal.y), pqEOTF(lmsSignal.z));
+    return float3(dot(dv.linear[0].xyz, lms), dot(dv.linear[1].xyz, lms), dot(dv.linear[2].xyz, lms));
 }
 
 static float hlgInverseOETF(float e) {
@@ -149,7 +204,8 @@ static float sampleLuma(texture2d<float> tex, sampler s, float2 uv, float4 sc) {
 fragment float4 nitFragment(VOut in [[stage_in]],
                             texture2d<float> lumaTex [[texture(0)]],
                             texture2d<float> chromaTex [[texture(1)]],
-                            constant NitUniforms &u [[buffer(0)]]) {
+                            constant NitUniforms &u [[buffer(0)]],
+                            constant DoviParams &dv [[buffer(1)]]) {
     constexpr sampler s(filter::linear, address::clamp_to_edge);
     // Referans yaması (eşitlik testi): PQ renk uzaylı katmana PQ kodu doğrudan yazılır,
     // ton eşlemeyi sistem yapar. Nit eğrisi uygulanmaz.
@@ -166,11 +222,16 @@ fragment float4 nitFragment(VOut in [[stage_in]],
     if (u.pattern.x < 0.5) {
         float y = sampleLuma(lumaTex, s, in.uv, u.scaler);
         float2 c = chromaTex.sample(s, in.uv).rg;
-        float3 ycc = float3((y - u.yRange.x) * u.yRange.y,
-                            (c.x - u.yRange.z) * u.yRange.w,
-                            (c.y - u.yRange.z) * u.yRange.w);
-        float3 rgbSignal = clamp(float3(dot(u.ycc0.xyz, ycc), dot(u.ycc1.xyz, ycc), dot(u.ycc2.xyz, ycc)), float3(0.0), float3(1.0));
-        lin = decodeTransfer(rgbSignal, tf, u.tone.z);
+        if (tf == 3) {
+            // DV P5: doğrudan doğrusal BT.2020 (nit).
+            lin = doviDecode(float3(y, c), dv);
+        } else {
+            float3 ycc = float3((y - u.yRange.x) * u.yRange.y,
+                                (c.x - u.yRange.z) * u.yRange.w,
+                                (c.y - u.yRange.z) * u.yRange.w);
+            float3 rgbSignal = clamp(float3(dot(u.ycc0.xyz, ycc), dot(u.ycc1.xyz, ycc), dot(u.ycc2.xyz, ycc)), float3(0.0), float3(1.0));
+            lin = decodeTransfer(rgbSignal, tf, u.tone.z);
+        }
     } else {
         float3 sig = patternSignal(in.uv, u.pattern, isHDR);
         lin = isHDR ? sig : pow(max(sig, float3(0.0)), float3(u.tone.z));
@@ -221,6 +282,7 @@ kernel void nitHistogram(texture2d<float> lumaTex [[texture(0)]],
                          texture2d<float> chromaTex [[texture(1)]],
                          constant NitUniforms &u [[buffer(0)]],
                          device atomic_uint *hist [[buffer(1)]],
+                         constant DoviParams &dv [[buffer(2)]],
                          uint2 gid [[thread_position_in_grid]],
                          uint2 grid [[threads_per_grid]],
                          uint lid [[thread_index_in_threadgroup]],
@@ -241,7 +303,10 @@ kernel void nitHistogram(texture2d<float> lumaTex [[texture(0)]],
                         (c.y - u.yRange.z) * u.yRange.w);
     float3 sig = clamp(float3(dot(u.ycc0.xyz, ycc), dot(u.ycc1.xyz, ycc), dot(u.ycc2.xyz, ycc)), float3(0.0), float3(1.0));
     float pq;
-    if (int(u.tone.y) == 2) {
+    if (int(u.tone.y) == 3) {
+        float3 nits = max(doviDecode(float3(y, c), dv), float3(0.0));
+        pq = pqInverseEOTF(max(nits.r, max(nits.g, nits.b)));
+    } else if (int(u.tone.y) == 2) {
         float3 nits = decodeTransfer(sig, 2, 1.0);
         pq = pqInverseEOTF(max(nits.r, max(nits.g, nits.b)));
     } else {

@@ -1,6 +1,6 @@
 # Nit Laboratuvarı: kurulum ve test rehberi
 
-**Sürüm 0.5.0 (S0 + S0b + S2.1–S2.3).** Amaç, ürünün 1 numaralı vaadini cihazda ölçmek: iPhone 11 Pro + iOS 27, SDR'da da HDR'da da beyazı panel tepesine (≈ 1200 nit) çıkarabiliyor mu ve bunu film boyunca sürdürebiliyor mu? (02-cozum §10.1)
+**Sürüm 0.6.0 (S0 + S0b + S2).** Amaç, ürünün 1 numaralı vaadini cihazda ölçmek: iPhone 11 Pro + iOS 27, SDR'da da HDR'da da beyazı panel tepesine (≈ 1200 nit) çıkarabiliyor mu ve bunu film boyunca sürdürebiliyor mu? (02-cozum §10.1)
 
 ## 1. Kurulum
 
@@ -98,6 +98,7 @@ Dosyaları iPhone'a **Dosyalar** uygulaması (iCloud Drive, "iPhone'umda" ya da 
 | T13 | **Kendi hattımız (S2.2)** | Bir MKV (HEVC HDR10), bir M2TS (Blu-ray remux) ve bir 1080p H.264 MKV aç. Her birinde 1'er dk oynat, ileri/geri sar, **Nit ↔ Referans** arasında geçiş yap, Döngü'yü dene. | Görüntü geliyor mu, takılma ya da yeşil/bozuk kare var mı? HUD'da düşen kare ve kadans (24p'de "3:2" ya da "5:5"). Hata mesajı çıkarsa ekran fotoğrafı. |
 | T14 | **Referans'ta Dolby Vision (AS-1, S2.3)** | DV **P8.1** bir MKV'yi Referans'ta aç. Aynı dosyanın RPU'su atılmış MP4'ünü (`hdr10.mp4`, yukarıda) de Referans'ta aç. Parlak sahnelerde ikisini karşılaştır. Sonra **P7** bir MKV (UHD Blu-ray'den) ile tekrarla. | DV tetikleniyorsa MKV'deki görüntü HDR10 sürümünden farklı (genellikle vurgularda daha kontrollü, sahneden sahneye değişen) olmalı. İkisi birebir aynıysa DV tetiklenmiyor demektir; yaz. P7'de biçim satırında "Referans'ta DV P8.1" ve olaylarda "DV P7 EL türü: MEL/FEL" görünmeli. |
 | T15 | **DV L1 sahne beyazı (AS-38 DV, AS-2)** | DV bir MKV'yi Nit'te, Parametreler → HDR referans beyazı = **Sahne** ile 10 dk izle. | HUD: `… · DV L1 (k = 4) · hist P90 X` satırı ve `RPU … · ort … · en kötü … ms` satırı. RPU süresi ortalamada < 2 ms olmalı. CSV'de `W_f` (L1'den), `W_hist` (histogramdan) ve `rpu_us` kolonları var; bu ikisinin oranından `k` kalibre edilecek. "DV L1 geçersiz" olayı çıkarsa yaz. |
+| T16 | **DV P5 Nit'te (AS-30, S2.4)** | Bir DV **P5** dosya aç (genellikle akış servislerinden gelen WEB-DL'ler; `ffprobe` çıktısında `dv_profile=5`). Nit'te birkaç dakika izle; aynı sahnelerde **Referans**'a geçip renkleri karşılaştır. Cilt tonu, gökyüzü, kırmızı/yeşil nesneler ve koyu sahnelere bak. | **Yeşil ya da mor renk kayması olmamalı**; renkler Referans'la aynı olmalı, yalnızca parlaklık farklı. HUD'da `P5 Nit: Y … parça poli · Cb … MMR3 · Cr … MMR3` satırı. "okunamayan" sayısı 0 olmalı. 2 sn içinde kod çözümü kurulamazsa uygulama kendiliğinden Referans'a geçer ve sebebini yazar; olursa ekran fotoğrafı al. |
 | T9 | **Dayanıklılık (K8, AS-28)** | HDR10 dosyası, Döngü açık, 2 saat. Üç ayrı çalıştırma: Nit + Tepe Kilidi, Nit (kilit kapalı), Referans. Şarjda değil, oda sıcaklığında. | CSV'yi paylaş. Headroom çöküşü olup olmadığını, ısıyı ve pil yüzdesini (başta ve sonda) not et. |
 
 Her testten sonra CSV'yi paylaşıp (AirDrop, Dosyalar ya da e-posta) bana gönderebilirsin. Raporu (`τ_up`, `w`/`κ`, γ, titreşim ve Tepe Kilidi varsayılanları) bu verilerden çıkaracağım.
@@ -105,7 +106,7 @@ Her testten sonra CSV'yi paylaşıp (AirDrop, Dosyalar ya da e-posta) bana gönd
 ## 5. Bilinen sınırlar (v0.5)
 
 - Kendi hattımızda (MKV/M2TS/TS) ses yok; S3'te gelecek. Altyazı ve PiP yok.
-- Dolby Vision **P5** Nit yolunda henüz gösterilemez (IPTPQc2 renk dönüşümü S2.4'te); şimdilik otomatik olarak Referans'ta oynatılır.
+- Dolby Vision **P5** Nit'te kendi kod çözümümüzle (RPU şekillendirme + IPT → LMS → BT.2020) gösterilir. Henüz cihazda doğrulanmadı (T16). Dolby'nin kendi ton eşlemesi (DM) yerine Nit eğrisi kullanılır; parlaklık farkı bu yüzden beklenir, renk farkı beklenmez.
 - UHD Blu-ray'in **iki ayrı PID'li** M2TS'sinde (BL ve EL ayrı akış) yalnızca BL okunur: görüntü HDR10 olarak oynar, DV devreye girmez. MKV'ye (makemkv / dovi_tool ile tek iz) dönüştürülmüş P7 dosyalarında DV çalışır.
 - DV'de L2/L8 trim düzeltmesi henüz uygulanmıyor; sahne beyazı yalnızca L1'den (`k = 4`).
 - 10-bit H.264 (Hi10P) donanımda çözülmez; HEVC ve 8-bit H.264 desteklenir.

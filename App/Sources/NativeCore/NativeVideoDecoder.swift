@@ -101,12 +101,20 @@ final class NativeVideoDecoder {
     private let queue: FrameQueue
     private(set) var lastError: OSStatus = noErr
 
-    init?(format: CMVideoFormatDescription, tenBit: Bool, queue: FrameQueue) {
+    /// - Parameter fullRange: Akışın kendi aralığı istenir; böylece çözücü kodları ölçeklemez (DV P5'in
+    ///   şekillendirmesi ham koda göre tanımlıdır).
+    init?(format: CMVideoFormatDescription, tenBit: Bool, fullRange: Bool, queue: FrameQueue) {
         self.format = format
         self.queue = queue
+        let pixelFormat: OSType
+        switch (tenBit, fullRange) {
+        case (true, false): pixelFormat = kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
+        case (true, true): pixelFormat = kCVPixelFormatType_420YpCbCr10BiPlanarFullRange
+        case (false, false): pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+        case (false, true): pixelFormat = kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
+        }
         let attributes: [String: Any] = [
-            kCVPixelBufferPixelFormatTypeKey as String: tenBit ? kCVPixelFormatType_420YpCbCr10BiPlanarVideoRange
-                                                               : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange,
+            kCVPixelBufferPixelFormatTypeKey as String: pixelFormat,
             kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any](),
             kCVPixelBufferMetalCompatibilityKey as String: true,
         ]

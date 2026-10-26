@@ -87,7 +87,7 @@ final class LabEngine: NSObject {
 
     // Kendi hattımız (S2.2): MKV/M2TS ve istenirse MP4/MOV.
     private var native: NativePlayer?
-    /// DV P5 Nit yolunda henüz gösterilemez (S2.4); o zamana kadar Referans'a yönlendirilir.
+    /// DV P5'in şekillendirme verisi okunamazsa Nit yerine Referans gösterilir (yanlış renk yerine).
     private var nativeForcedReference = false
     private static let nativeExtensions: Set<String> = ["mkv", "webm", "m2ts", "mts", "ts"]
 
@@ -98,6 +98,10 @@ final class LabEngine: NSObject {
     private var sceneWhiteFromL1 = false
     private var loggedElType: String?
     private var loggedRpuErrors = 0
+    private var loggedReshapeFailures = 0
+    /// DV P5 (S2.4): gösterilen karenin IPTPQc2 kod çözüm parametreleri; ilk parametreler gelene kadar kare çizilmez.
+    private var currentDovi: DoviShaderParams?
+    private var p5WaitingSince: CFTimeInterval?
 
     /// Kullanıcının seçtiği mod; P5 gibi durumlarda fiilen Referans gösterilir.
     private var effectiveMode: RenderMode { nativeForcedReference ? .reference : params.mode }
@@ -356,8 +360,11 @@ final class LabEngine: NSObject {
         native?.stop()
         native = nil
         dovi = nil
+        currentDovi = nil
+        p5WaitingSince = nil
         sceneWhiteFromL1 = false
         snapshot.rpuSummary = nil
+        snapshot.reshapeSummary = nil
         snapshot.rpuMeanMicros = nil
         snapshot.histogramWhite = nil
         nativeForcedReference = false
@@ -498,6 +505,15 @@ final class LabEngine: NSObject {
             if isPlayingNow { ticksSinceFrame += 1 }
         }
 
+        // DV P5 (S2.4): gösterilen karenin kod çözüm parametreleri; gelmezse önceki kare parametreleri sürer.
+        if let dovi, dovi.decodesReshaping, let pts = newFramePTS {
+            if let params = dovi.reshape(forPTS: pts) {
+                currentDovi = params
+                p5WaitingSince = nil
+            } else if currentDovi == nil {
+                waitForP5Parameters(now: now)
+            }
+        }
         // Sahne beyazı, DV: gösterilen karenin RPU L1'i (geçerliyse histogram yerine; §3.5.1 öncelik 1).
         if let dovi, let pts = newFramePTS, let l1 = dovi.l1(forPTS: pts) {
             updateSceneWhite(l1: l1, pts: pts)
@@ -524,10 +540,11 @@ final class LabEngine: NSObject {
                     var pattern: PatternSpec?
                     if case .pattern(let p) = source { pattern = p }
                     // Histogram yalnızca yeni HDR karelerinde; L_ref kipinden bağımsız (teşhis için de gerekir).
-                    let wantsHistogram = pattern == nil && (currentFormat?.transfer.isHDR ?? false)
-                    snapshot.outputMax = renderer.render(layer: surface.metalLayer, pixelBuffer: currentBuffer, format: currentFormat,
+                    let wantsHistogram = pattern == nil && ((currentFormat?.transfer.isHDR ?? false) || currentDovi != nil)
+                    snapshot.outputMax = renderer.render(layer: surface.metalLayer, pixelBuffer: renderableBuffer, format: currentFormat,
                                                          pattern: pattern, settings: renderSettings(pattern: pattern), headroom: hEff,
-                                                         presentAt: presentAt, histogramPTS: wantsHistogram ? newFramePTS : nil)
+                                                         presentAt: presentAt, histogramPTS: wantsHistogram ? newFramePTS : nil,
+                                                         dovi: currentDovi)
                 } else {
                     snapshot.outputMax = 0
                 }
@@ -546,9 +563,9 @@ final class LabEngine: NSObject {
                 }
             case .tonality:
                 // Sağ yarı: Nit yolu, H = 1'e zorlanmış; sol yarıdaki Apple SDR video işleyişiyle aynı beyazda.
-                snapshot.outputMax = renderer.render(layer: surface.metalLayer, pixelBuffer: currentBuffer, format: currentFormat,
+                snapshot.outputMax = renderer.render(layer: surface.metalLayer, pixelBuffer: renderableBuffer, format: currentFormat,
                                                      pattern: nil, settings: renderSettings(pattern: nil), headroom: 1,
-                                                     presentAt: presentAt)
+                                                     presentAt: presentAt, dovi: currentDovi)
             }
             lastRenderedHeadroom = hEff
             needsRender = false
@@ -652,7 +669,10 @@ final class LabEngine: NSObject {
             }
         }
 
-        nativeForcedReference = info.dovi?.profile == 5
+        nativeForcedReference = false
+        currentDovi = nil
+        p5WaitingSince = nil
+        loggedReshapeFailures = 0
         surface.nativeBackend = true
         surface.sampleLayer.controlTimebase = player.timebase
         player.attach(renderer: surface.sampleLayer.sampleBufferRenderer)
@@ -665,12 +685,35 @@ final class LabEngine: NSObject {
 
         snapshot.isHDR = info.isHDR
         snapshot.formatLabel = info.label + referenceNote + " · kendi hattımız"
-        if nativeForcedReference {
-            snapshot.errorMessage = "Dolby Vision P5: Nit yolu S2.4'te; şimdilik Referans gösteriliyor"
+        if dovi?.decodesReshaping == true {
+            event("DV P5: Nit'te IPTPQc2 kod çözümü (RPU şekillendirme + IPT → LMS → BT.2020)")
         }
         event("Kendi hattımız: \(info.label)" + (info.maxCLL.map { " · MaxCLL \(Int($0))" } ?? "")
               + " · çapa \(TR.num(initialAnchor, 0)) nit · ses S3'te")
         player.start()
+    }
+
+    /// P5 karesi kod çözüm parametreleri olmadan geldi. 2 sn içinde gelmezse Referans'a geçilir:
+    /// IPTPQc2'yi HDR10 gibi göstermek yeşil/mor bir görüntü verir.
+    private func waitForP5Parameters(now: CFTimeInterval) {
+        guard let since = p5WaitingSince else {
+            p5WaitingSince = now
+            return
+        }
+        guard now - since > 2, !nativeForcedReference else { return }
+        nativeForcedReference = true
+        surface.apply(.single(effectiveMode))
+        native?.setOutput(.reference)
+        updatePeakLockEnabled()
+        let reason = dovi?.currentStats.lastReshapeError ?? "RPU'da şekillendirme verisi yok"
+        snapshot.errorMessage = "DV P5 kod çözümü kurulamadı (\(reason)); Referans gösteriliyor"
+        event("DV P5: şekillendirme 2 sn içinde okunamadı → Referans (\(reason))")
+    }
+
+    /// DV P5'te parametreler hazır değilse kare çizilmez (yanlış renk yerine siyah).
+    private var renderableBuffer: CVPixelBuffer? {
+        if dovi?.decodesReshaping == true, currentDovi == nil { return nil }
+        return currentBuffer
     }
 
     private func nativeLooped() {
@@ -780,6 +823,16 @@ final class LabEngine: NSObject {
         if stats.errors > 0 { parts.append("hata \(stats.errors)") }
         snapshot.rpuSummary = parts.joined(separator: " · ")
         snapshot.rpuMeanMicros = stats.meanMicros
+        if dovi.decodesReshaping {
+            var text = "P5 Nit: " + (stats.reshapeSummary ?? "eşleme bekleniyor")
+            if stats.reshapeChanges > 1 { text += " · \(stats.reshapeChanges) eşleme" }
+            if stats.reshapeFailures > 0 { text += " · okunamayan \(stats.reshapeFailures)" }
+            snapshot.reshapeSummary = text
+            if stats.reshapeFailures > 0, loggedReshapeFailures == 0 {
+                event("DV P5 şekillendirme hatası: \(stats.lastReshapeError ?? "?") (önceki eşleme sürüyor)")
+            }
+            loggedReshapeFailures = stats.reshapeFailures
+        }
 
         if let el = stats.elType, el != loggedElType {
             loggedElType = el

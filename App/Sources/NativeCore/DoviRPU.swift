@@ -1,6 +1,7 @@
 import CoreMedia
 import Foundation
 import MediaFormat
+import NitMath
 import QuartzCore
 
 /// Bir karenin Dolby Vision L1 meta verisi (12-bit PQ kodları, 0–4095).
@@ -11,8 +12,22 @@ struct DoviL1: Equatable {
     var sceneRefresh: Bool
 }
 
-/// libdovi ile Dolby Vision RPU işleme (S2.3, 02-cozum §3.5.1 ve §3.7):
-/// - Nit yolu: her paketin RPU'sundaki L1 PTS'ye göre saklanır (sahne beyazı).
+/// Bir DV P5 karesinin GPU'ya giden şekillendirme ve renk parametreleri (S2.4). Ardışık karelerde aynı
+/// eşleme tekrar ettiğinde aynı örnek paylaşılır.
+final class DoviShaderParams: @unchecked Sendable {
+    let model: DolbyVisionReshape
+    /// `DolbyVisionReshape.packed` düzeni; kod ölçeğini renderer doku biçimine göre yazar.
+    let packed: [SIMD4<Float>]
+
+    init(model: DolbyVisionReshape) {
+        self.model = model
+        packed = model.packed(codeScale: 1)
+    }
+}
+
+/// libdovi ile Dolby Vision RPU işleme (S2.3–S2.4, 02-cozum §3.5.1 ve §3.7):
+/// - Nit yolu: her paketin RPU'sundaki L1 PTS'ye göre saklanır (sahne beyazı). P5'te ayrıca şekillendirme
+///   eğrileri ve IPT → LMS matrisleri GPU düzenine çevrilir (IPTPQc2 kod çözümü, AS-30).
 /// - Referans yolu, P7: EL NAL'ları (63) atılır, RPU (62) P8.1'e dönüştürülür. MEL'de eşleme korunur (kip 4),
 ///   FEL'de etkisizleştirilir (kip 2): FEL'siz BL zaten HDR10 uyumludur. Sistem BL + RPU'yu P8.1 olarak işler.
 /// Paket çağrıları demux thread'inden, okumalar ana thread'den gelir.
@@ -25,17 +40,53 @@ final class DoviRpuProcessor: @unchecked Sendable {
         /// RPU başlığından tahmin edilen profil; P7'de EL türü ("MEL" / "FEL").
         var guessedProfile: UInt8?
         var elType: String?
-        /// RPU başına süre (µs): ayrıştırma + L1 (+ Referans'ta dönüşüm ve yazma). AS-2 hedefi < 2000 µs.
+        /// RPU başına süre (µs): ayrıştırma + L1 (+ P5 şekillendirme, Referans'ta dönüşüm ve yazma). AS-2 hedefi < 2000 µs.
         var meanMicros = 0.0
         var maxMicros = 0.0
+        /// P5: son eşlemenin özeti ("Y 8 poli · Cb MMR3 · Cr MMR3"), farklı eşleme sayısı ve okunamayanlar.
+        var reshapeSummary: String?
+        var reshapeChanges = 0
+        var reshapeFailures = 0
+        var lastReshapeError: String?
+    }
+
+    private struct Entry {
+        var key: Int64
+        var l1: DoviL1?
+        var reshape: DoviShaderParams?
+    }
+
+    private struct HeaderInfo {
+        var profile: UInt8
+        var elType: String?
+        var blBitDepth: Int
+        var log2Denom: Int
+        var coefficientDataType: UInt8
+    }
+
+    /// RPU renk matrisleri (ham): `ycc_to_rgb` (2^13), ofsetler (2^28), `rgb_to_lms` (2^14).
+    private struct ColorMatrices: Equatable {
+        var ycc: [Int16]
+        var offset: [UInt32]
+        var lms: [Int16]
+
+        /// dovi_tool'un P5 varsayılanları: RPU'da DM verisi hiç yoksa kullanılır.
+        static let p5Default = ColorMatrices(ycc: [8192, 799, 1681, 8192, -933, 1091, 8192, 267, -5545],
+                                             offset: [0, 134_217_728, 134_217_728],
+                                             lms: [17081, -349, -349, -349, 17081, -349, -349, -349, 17081])
     }
 
     let sourceProfile: UInt8
+    /// P5: Nit yolunda IPTPQc2 kod çözümü için şekillendirme okunur.
+    var decodesReshaping: Bool { sourceProfile == 5 }
     private let lengthSize: Int
     private let lock = NSLock()
-    private var recent: [(key: Int64, l1: DoviL1)] = []
+    private var recent: [Entry] = []
     private var stats = Stats()
     private static let recentCapacity = 120
+    // Yalnızca demux thread'i: önceki RPU'dan devralınanlar (`use_prev_vdr_rpu_flag`, DM verisi olmayan RPU).
+    private var lastReshape: DoviShaderParams?
+    private var lastColor: ColorMatrices?
 
     init?(info: VideoStreamInfo) {
         guard info.codecType == kCMVideoCodecType_HEVC, let dovi = info.dovi, dovi.rpuPresent else { return nil }
@@ -61,7 +112,15 @@ final class DoviRpuProcessor: @unchecked Sendable {
         let key = Self.key(seconds)
         lock.lock()
         defer { lock.unlock() }
-        return recent.last(where: { $0.key == key })?.l1
+        return recent.last(where: { $0.key == key && $0.l1 != nil })?.l1
+    }
+
+    /// P5: verilen sunum zamanındaki karenin kod çözüm parametreleri.
+    func reshape(forPTS seconds: Double) -> DoviShaderParams? {
+        let key = Self.key(seconds)
+        lock.lock()
+        defer { lock.unlock() }
+        return recent.last(where: { $0.key == key && $0.reshape != nil })?.reshape
     }
 
     /// Nit yolu: paketteki RPU'nun L1'ini saklar; paket değişmez.
@@ -123,22 +182,36 @@ final class DoviRpuProcessor: @unchecked Sendable {
             return nil
         }
 
-        var header: (profile: UInt8, elType: String?)?
+        var header: HeaderInfo?
         if let h = dovi_rpu_get_header(rpu) {
-            header = (h.pointee.guessed_profile, h.pointee.el_type.map { String(cString: $0) })
+            let v = h.pointee
+            header = HeaderInfo(profile: v.guessed_profile, elType: v.el_type.map { String(cString: $0) },
+                                blBitDepth: Int(v.bl_bit_depth_minus8) + 8, log2Denom: Int(v.coefficient_log2_denom),
+                                coefficientDataType: v.coefficient_data_type)
             dovi_rpu_free_header(h)
         }
         var l1: DoviL1?
         if let dm = dovi_rpu_get_vdr_dm_data(rpu) {
-            if let level1 = dm.pointee.dm_data.level1 {
+            let d = dm.pointee
+            if let level1 = d.dm_data.level1 {
                 l1 = DoviL1(minPQ: level1.pointee.min_pq, maxPQ: level1.pointee.max_pq, averagePQ: level1.pointee.avg_pq,
-                            sceneRefresh: dm.pointee.scene_refresh_flag != 0)
+                            sceneRefresh: d.scene_refresh_flag != 0)
+            }
+            if decodesReshaping {
+                lastColor = ColorMatrices(
+                    ycc: [d.ycc_to_rgb_coef0, d.ycc_to_rgb_coef1, d.ycc_to_rgb_coef2, d.ycc_to_rgb_coef3, d.ycc_to_rgb_coef4,
+                          d.ycc_to_rgb_coef5, d.ycc_to_rgb_coef6, d.ycc_to_rgb_coef7, d.ycc_to_rgb_coef8],
+                    offset: [d.ycc_to_rgb_offset0, d.ycc_to_rgb_offset1, d.ycc_to_rgb_offset2],
+                    lms: [d.rgb_to_lms_coef0, d.rgb_to_lms_coef1, d.rgb_to_lms_coef2, d.rgb_to_lms_coef3, d.rgb_to_lms_coef4,
+                          d.rgb_to_lms_coef5, d.rgb_to_lms_coef6, d.rgb_to_lms_coef7, d.rgb_to_lms_coef8])
             }
             dovi_rpu_free_vdr_dm_data(dm)
         }
 
         guard convert else {
-            finish(start: start, pts: pts, l1: l1, header: header, converted: false, error: nil)
+            var reshape: ReshapeOutcome?
+            if decodesReshaping, let header { reshape = reshapeParams(rpu, header: header) }
+            finish(start: start, pts: pts, l1: l1, header: header, converted: false, error: nil, reshape: reshape)
             return nil
         }
         let mode: UInt8 = header?.elType == "FEL" ? 2 : 4
@@ -158,8 +231,8 @@ final class DoviRpuProcessor: @unchecked Sendable {
         return output
     }
 
-    private func finish(start: CFTimeInterval, pts: Double?, l1: DoviL1?, header: (profile: UInt8, elType: String?)?,
-                        converted: Bool, error: String?) {
+    private func finish(start: CFTimeInterval, pts: Double?, l1: DoviL1?, header: HeaderInfo?,
+                        converted: Bool, error: String?, reshape: ReshapeOutcome? = nil) {
         let micros = (CACurrentMediaTime() - start) * 1_000_000
         lock.lock()
         defer { lock.unlock() }
@@ -175,9 +248,127 @@ final class DoviRpuProcessor: @unchecked Sendable {
             stats.guessedProfile = header.profile
             if let el = header.elType { stats.elType = el }
         }
-        if let l1, let pts {
-            recent.append((Self.key(pts), l1))
+        if let reshape {
+            if let failure = reshape.failure {
+                stats.reshapeFailures += 1
+                stats.lastReshapeError = failure
+            }
+            if reshape.changed, let params = reshape.params {
+                stats.reshapeChanges += 1
+                stats.reshapeSummary = Self.summary(params.model)
+            }
+        }
+        if let pts, l1 != nil || reshape?.params != nil {
+            recent.append(Entry(key: Self.key(pts), l1: l1, reshape: reshape?.params))
             if recent.count > Self.recentCapacity { recent.removeFirst(recent.count - Self.recentCapacity) }
         }
+    }
+
+    // MARK: P5 şekillendirme (S2.4)
+
+    private struct ReshapeOutcome {
+        var params: DoviShaderParams?
+        var changed = false
+        var failure: String?
+    }
+
+    /// RPU eşlemesinden kod çözüm parametreleri. Eşleme yoksa (`use_prev_vdr_rpu_flag`) ya da okunamazsa
+    /// önceki karenin parametreleri sürer; ilk karede hiç yoksa `nil` (kare gösterilmez, yanlış renk yerine siyah).
+    private func reshapeParams(_ rpu: OpaquePointer, header: HeaderInfo) -> ReshapeOutcome {
+        guard let pointer = dovi_rpu_get_data_mapping(rpu) else { return ReshapeOutcome(params: lastReshape) }
+        defer { dovi_rpu_free_data_mapping(pointer) }
+        guard header.coefficientDataType == 0 else {
+            return ReshapeOutcome(params: lastReshape, failure: "kayan noktalı RPU katsayıları desteklenmiyor")
+        }
+        let mapping = pointer.pointee
+        var curves: [DolbyVisionReshape.RawCurve] = []
+        for curve in [mapping.curves.0, mapping.curves.1, mapping.curves.2] {
+            guard let raw = Self.rawCurve(curve) else {
+                return ReshapeOutcome(params: lastReshape, failure: "şekillendirme eğrisi okunamadı (doğrusal ara değerleme?)")
+            }
+            curves.append(raw)
+        }
+        let color = lastColor ?? .p5Default
+        guard let model = DolbyVisionReshape.make(blBitDepth: header.blBitDepth, log2Denom: header.log2Denom, curves: curves,
+                                                  yccToRGB: color.ycc, yccToRGBOffset: color.offset, rgbToLMS: color.lms) else {
+            return ReshapeOutcome(params: lastReshape, failure: "tutarsız şekillendirme verisi")
+        }
+        if let last = lastReshape, last.model == model { return ReshapeOutcome(params: last) }
+        let params = DoviShaderParams(model: model)
+        lastReshape = params
+        return ReshapeOutcome(params: params, changed: true)
+    }
+
+    private static func rawCurve(_ curve: DoviReshapingCurve) -> DolbyVisionReshape.RawCurve? {
+        let deltas = buffer(curve.pivots.data, curve.pivots.len)
+        let pieceCount = deltas.count - 1
+        guard pieceCount >= 1 else { return nil }
+        var pieces: [DolbyVisionReshape.RawPiece] = []
+        if curve.mapping_idc == 0, let poly = curve.polynomial?.pointee {
+            // Doğrusal ara değerleme (linear_interp_flag) libdovi'de de uygulanmıyor.
+            guard !buffer(poly.linear_interp_flag.data, poly.linear_interp_flag.len).contains(where: { $0 != 0 }) else { return nil }
+            let ints = rows(poly.poly_coef_int)
+            let fracs = rows(poly.poly_coef)
+            guard ints.count >= pieceCount, fracs.count >= pieceCount else { return nil }
+            for i in 0..<pieceCount {
+                guard ints[i].count == fracs[i].count else { return nil }
+                pieces.append(.polynomial(zip(ints[i], fracs[i]).map { DolbyVisionReshape.Fixed(int: $0, frac: $1) }))
+            }
+        } else if curve.mapping_idc == 1, let mmr = curve.mmr?.pointee {
+            let orders = buffer(mmr.mmr_order_minus1.data, mmr.mmr_order_minus1.len)
+            let constantInts = buffer(mmr.mmr_constant_int.data, mmr.mmr_constant_int.len)
+            let constantFracs = buffer(mmr.mmr_constant.data, mmr.mmr_constant.len)
+            let coefInts = cubes(mmr.mmr_coef_int)
+            let coefFracs = cubes(mmr.mmr_coef)
+            guard orders.count >= pieceCount, constantInts.count >= pieceCount, constantFracs.count >= pieceCount,
+                  coefInts.count >= pieceCount, coefFracs.count >= pieceCount else { return nil }
+            for i in 0..<pieceCount {
+                let order = Int(orders[i]) + 1
+                guard coefInts[i].count >= order, coefFracs[i].count >= order else { return nil }
+                let weights = (0..<order).map { j in
+                    zip(coefInts[i][j], coefFracs[i][j]).map { DolbyVisionReshape.Fixed(int: $0, frac: $1) }
+                }
+                pieces.append(.mmr(constant: DolbyVisionReshape.Fixed(int: constantInts[i], frac: constantFracs[i]),
+                                   orders: weights))
+            }
+        } else {
+            return nil
+        }
+        return DolbyVisionReshape.RawCurve(pivotDeltas: deltas, pieces: pieces)
+    }
+
+    private static func buffer<T>(_ pointer: UnsafePointer<T>?, _ count: Int) -> [T] {
+        guard let pointer, count > 0 else { return [] }
+        return Array(UnsafeBufferPointer(start: pointer, count: count))
+    }
+
+    private static func rows(_ d: DoviI64Data2D) -> [[Int64]] {
+        buffer(d.list, d.len).map { row in row.map { buffer($0.pointee.data, $0.pointee.len) } ?? [] }
+    }
+
+    private static func rows(_ d: DoviU64Data2D) -> [[UInt64]] {
+        buffer(d.list, d.len).map { row in row.map { buffer($0.pointee.data, $0.pointee.len) } ?? [] }
+    }
+
+    private static func cubes(_ d: DoviI64Data3D) -> [[[Int64]]] {
+        buffer(d.list, d.len).map { plane in plane.map { rows($0.pointee) } ?? [] }
+    }
+
+    private static func cubes(_ d: DoviU64Data3D) -> [[[UInt64]]] {
+        buffer(d.list, d.len).map { plane in plane.map { rows($0.pointee) } ?? [] }
+    }
+
+    /// "Y 8 poli · Cb MMR3 · Cr MMR3"
+    private static func summary(_ model: DolbyVisionReshape) -> String {
+        zip(["Y", "Cb", "Cr"], model.components).map { name, component in
+            let polynomials = component.pieces.filter { if case .polynomial = $0 { return true } else { return false } }.count
+            let mmrOrder = component.pieces.compactMap { piece -> Int? in
+                if case .mmr(_, let orders) = piece { return orders.count } else { return nil }
+            }.max()
+            var text = "\(name) \(component.pieces.count) parça"
+            if polynomials > 0 { text += " poli" }
+            if let mmrOrder { text += " MMR\(mmrOrder)" }
+            return text
+        }.joined(separator: " · ")
     }
 }

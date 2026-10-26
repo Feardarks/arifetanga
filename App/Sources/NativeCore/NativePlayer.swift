@@ -191,7 +191,8 @@ final class NativePlayer: @unchecked Sendable {
                 nitPacketObserver?(packet)
                 guard let sample = FormatDescriptions.sampleBuffer(packet, format: nitFormat) else { continue }
                 if decoder == nil {
-                    decoder = NativeVideoDecoder(format: nitFormat, tenBit: info.bitDepth > 8 || info.isHDR, queue: frames)
+                    decoder = NativeVideoDecoder(format: nitFormat, tenBit: info.bitDepth > 8 || info.isHDR, fullRange: info.fullRange,
+                                                 queue: frames)
                     if decoder == nil { report("VideoToolbox oturumu açılamadı") }
                 }
                 if let decoder, !decoder.decode(sample), decoder.lastError != noErr {

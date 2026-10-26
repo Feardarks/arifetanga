@@ -170,6 +170,8 @@ struct LabSnapshot {
     /// DV RPU işleme özeti (S2.3); DV yoksa `nil`. Süre RPU başına ortalama (µs).
     var rpuSummary: String?
     var rpuMeanMicros: Double?
+    /// DV P5 Nit kod çözümü özeti (S2.4): parça türleri, eşleme sayısı, okunamayanlar.
+    var reshapeSummary: String?
 
     /// P-2: çıkış hiçbir zaman sistemin o an verdiği headroom'u aşmaz.
     var p2OK: Bool { outputMax <= hCur + 1e-6 }

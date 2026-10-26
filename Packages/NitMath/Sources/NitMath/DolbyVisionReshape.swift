@@ -154,7 +154,7 @@ public struct DolbyVisionReshape: Equatable, Sendable {
     static let componentStride = 11
     static let nonlinearIndex = 33
     static let linearIndex = 36
-    static let infoIndex = 39
+    public static let infoIndex = 39
     static let mmrIndex = 40
     static let mmrSlotsPerComponent = 48
 
