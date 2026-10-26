@@ -8,6 +8,7 @@ on:
     paths:
       - "App/**"
       - "Packages/**"
+      - "ThirdParty/**"
       - "project.yml"
       - ".github/workflows/ios-build.yml"
 
@@ -19,7 +20,7 @@ jobs:
   build:
     name: İmzasız IPA
     runs-on: macos-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
 
@@ -30,6 +31,27 @@ jobs:
           sudo xcode-select -s "$XCODE"
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
+
+      - name: Native bağımlılık önbelleği (FFmpeg, libdovi)
+        id: deps-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ThirdParty/build
+          key: deps-ios-v1-${{ hashFiles('ThirdParty/*.sh', 'ThirdParty/versions.lock') }}
+
+      - name: Native bağımlılıkları derle (önbellek yoksa)
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        run: ThirdParty/build-all.sh
+
+      - name: Native bağımlılıkları önbelleğe kaydet
+        if: steps.deps-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ThirdParty/build
+          key: deps-ios-v1-${{ hashFiles('ThirdParty/*.sh', 'ThirdParty/versions.lock') }}
+
+      - name: libdovi C başlığı
+        run: find ThirdParty/build/Dovi.xcframework -name '*.h' -print -exec cat {} \;
 
       - name: XcodeGen kur ve projeyi üret
         run: |

@@ -1,0 +1,7 @@
+# Native bağımlılık sürümleri (02-cozum §8.5). Bu dosya ya da betikler değişince CI önbelleği yenilenir.
+IOS_MIN=18.0
+# FFmpeg: yalnızca LGPL bileşenleri (demux, parser, bsf). Kod çözme VideoToolbox'ta.
+FFMPEG_VERSION=8.0
+# libdovi (dovi_tool deposundaki dolby_vision crate'i, MIT). Sabit commit; günlükte yazılır.
+DOVI_TOOL_REPO=https://github.com/quietvoid/dovi_tool
+DOVI_TOOL_REF=main
