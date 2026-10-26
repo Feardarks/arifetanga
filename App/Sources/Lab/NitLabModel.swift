@@ -31,7 +31,42 @@ final class NitLabModel: ObservableObject {
         let url: URL
     }
 
+    /// Eşitlik testi (S0-C, AS-26/K2) durumu.
+    struct EqualityTest {
+        enum Answer: String { case leftBrighter = "A daha parlak", same = "Aynı", rightBrighter = "B daha parlak" }
+        struct Trial: Identifiable {
+            let id: Int
+            let nitOnLeft: Bool
+            var answer: Answer?
+
+            /// Yanıtı yollar cinsinden yorumlar.
+            var verdict: String {
+                guard let answer else { return "—" }
+                switch answer {
+                case .same: return "Aynı"
+                case .leftBrighter: return nitOnLeft ? "Nit daha parlak" : "Referans daha parlak"
+                case .rightBrighter: return nitOnLeft ? "Referans daha parlak" : "Nit daha parlak"
+                }
+            }
+        }
+        enum Phase { case setup, running, blank, done }
+
+        static let trialCount = 5
+        var windowPercent = 10.0
+        var levelNits = 1000.0
+        var phase: Phase = .setup
+        var trials: [Trial] = []
+
+        var current: Int { trials.count }
+        var sameCount: Int { trials.filter { $0.answer == .same }.count }
+        var passed: Bool { sameCount >= 4 }
+    }
+
+    @Published var equality: EqualityTest?
+    @Published private(set) var toneTestActive = false
+
     let engine = LabEngine()
+    private static let gammaKey = "nitLab.sdrGamma"
     private var toastHistory: [HeadroomStatus: Date] = [:]
     private var toastTask: Task<Void, Never>?
     private var shiftTask: Task<Void, Never>?
@@ -41,6 +76,9 @@ final class NitLabModel: ObservableObject {
         engine.onSnapshot = { [weak self] snap in self?.snapshot = snap }
         engine.onStatusChange = { [weak self] status in self?.statusChanged(status) }
         loadRecents()
+        // Tonalite testinde seçilen gama varsayılan olur (K11).
+        let savedGamma = UserDefaults.standard.double(forKey: Self.gammaKey)
+        if savedGamma > 0 { params.sdrGamma = savedGamma }
     }
 
     func appear() {
@@ -98,6 +136,7 @@ final class NitLabModel: ObservableObject {
     func resetKnee() { engine.resetKnee() }
 
     func resetParams() {
+        UserDefaults.standard.removeObject(forKey: Self.gammaKey)
         params = NitParams(mode: params.mode)
         engine.event("Parametreler varsayılana döndü")
     }
@@ -108,6 +147,88 @@ final class NitLabModel: ObservableObject {
         } catch {
             showToast("CSV yazılamadı: \(error.localizedDescription)")
         }
+    }
+
+    // MARK: Eşitlik testi (S0-C)
+
+    func openEqualitySetup() {
+        endToneTest()
+        filePanelVisible = false
+        parameterPanelVisible = false
+        equality = EqualityTest()
+    }
+
+    func startEquality() {
+        guard var test = equality else { return }
+        test.trials = []
+        test.phase = .running
+        equality = test
+        engine.event("Eşitlik testi başladı: %\(Int(test.windowPercent)) pencere · PQ \(Int(test.levelNits))")
+        nextEqualityTrial()
+    }
+
+    func answerEquality(_ answer: EqualityTest.Answer) {
+        guard var test = equality, test.phase == .running, !test.trials.isEmpty else { return }
+        var trial = test.trials.removeLast()
+        trial.answer = answer
+        test.trials.append(trial)
+        engine.event("Eşitlik denemesi \(trial.id): Nit \(trial.nitOnLeft ? "solda" : "sağda") · yanıt \(answer.rawValue) · \(trial.verdict)")
+        if test.trials.count >= EqualityTest.trialCount {
+            test.phase = .done
+            equality = test
+            engine.endTest()
+            engine.event("Eşitlik testi sonucu: \(test.sameCount)/\(EqualityTest.trialCount) Aynı · K2 \(test.passed ? "geçti" : "geçmedi")")
+            return
+        }
+        // Denemeler arası 500 ms siyah ekran (göz uyumu).
+        test.phase = .blank
+        equality = test
+        engine.blankEquality()
+        Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            self?.nextEqualityTrial()
+        }
+    }
+
+    func closeEquality() {
+        equality = nil
+        engine.endTest()
+    }
+
+    private func nextEqualityTrial() {
+        guard var test = equality, test.phase != .done, test.phase != .setup else { return }
+        let nitOnLeft = Bool.random()
+        test.trials.append(EqualityTest.Trial(id: test.trials.count + 1, nitOnLeft: nitOnLeft))
+        test.phase = .running
+        equality = test
+        engine.beginEqualityTrial(windowFraction: test.windowPercent / 100, levelNits: test.levelNits, nitOnLeft: nitOnLeft)
+    }
+
+    // MARK: Tonalite testi (S0-D)
+
+    func startToneTest() {
+        guard engine.canRunToneTest else {
+            showToast("Tonalite testi için önce bir SDR video aç")
+            return
+        }
+        equality = nil
+        filePanelVisible = false
+        parameterPanelVisible = false
+        toneTestActive = true
+        engine.beginToneTest()
+    }
+
+    func confirmToneMatch() {
+        UserDefaults.standard.set(params.sdrGamma, forKey: Self.gammaKey)
+        engine.event("Tonalite testi: seçilen SDR gaması \(params.sdrGamma)")
+        showToast("SDR gaması \(TR.num(params.sdrGamma)) varsayılan oldu")
+        endToneTest()
+    }
+
+    func endToneTest() {
+        guard toneTestActive else { return }
+        toneTestActive = false
+        engine.endTest()
     }
 
     // MARK: HUD mesajları (03-tasarim §4.8; aynı mesaj en fazla dakikada bir)

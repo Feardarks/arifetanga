@@ -39,6 +39,15 @@ struct ParameterPanel: View {
                 }
                 .pickerStyle(.segmented)
 
+                group("Ölçekleyici")
+                Picker("Ölçekleyici", selection: $model.params.highQualityScaler) {
+                    Text("Kaliteli").tag(true)
+                    Text("Bilineer").tag(false)
+                }
+                .pickerStyle(.segmented)
+                Text("Kaliteli: büyütmede bicubic, 4K'yı küçültürken 2×2 süper örnekleme.")
+                    .font(.caption).foregroundStyle(DS.secondary)
+
                 group("SDR gaması")
                 Picker("Gama", selection: $model.params.sdrGamma) {
                     Text("2,2").tag(2.2)
@@ -60,7 +69,7 @@ struct ParameterPanel: View {
     }
 
     private func group(_ title: String) -> some View {
-        Text(title.uppercased())
+        Text(title)
             .font(.caption.weight(.semibold))
             .foregroundStyle(DS.secondary)
             .padding(.top, 6)

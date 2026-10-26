@@ -53,15 +53,20 @@ struct NitLabStrip: View {
                 PillButton(title: "Titreşim", isOn: model.params.dither,
                            disabled: model.params.mode == .reference) { model.params.dither.toggle() }
             }
-            // Satır 3: araçlar
+            // Satır 3: araçlar (dar ekranda yatay kayar)
             HStack(spacing: 8) {
-                PillButton(title: "Parametreler", isOn: nil) {
-                    model.filePanelVisible = false
-                    model.parameterPanelVisible.toggle()
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 8) {
+                        PillButton(title: "Eşitlik testi", isOn: nil) { model.openEqualitySetup() }
+                        PillButton(title: "Tonalite testi", isOn: nil) { model.startToneTest() }
+                        PillButton(title: "Parametreler", isOn: nil) {
+                            model.filePanelVisible = false
+                            model.parameterPanelVisible.toggle()
+                        }
+                        PillButton(title: "CSV paylaş", isOn: nil) { model.exportCSV() }
+                        PillButton(title: model.hudCompact ? "HUD büyüt" : "HUD küçült", isOn: nil) { model.hudCompact.toggle() }
+                    }
                 }
-                PillButton(title: "CSV paylaş", isOn: nil) { model.exportCSV() }
-                PillButton(title: model.hudCompact ? "HUD büyüt" : "HUD küçült", isOn: nil) { model.hudCompact.toggle() }
-                Spacer(minLength: 8)
                 PillButton(title: "Kapat", isOn: nil, action: onClose)
             }
         }

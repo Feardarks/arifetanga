@@ -16,8 +16,36 @@ struct NitLabScreen: View {
             Color.clear
                 .contentShape(Rectangle())
                 .ignoresSafeArea()
-                .onTapGesture { model.chromeVisible.toggle() }
+                .onTapGesture { if !isTesting { model.chromeVisible.toggle() } }
 
+            if isTesting {
+                // Testler sırasında yalnızca test arayüzü görünür; telemetri kaydı sürer.
+                EqualityTestOverlay(model: model)
+                ToneTestOverlay(model: model)
+            } else {
+                labChrome
+            }
+        }
+        .background(Color.black)
+        .statusBarHidden(true)
+        .persistentSystemOverlays(.hidden)
+        .onAppear { model.appear() }
+        .onDisappear { model.disappear() }
+        .fileImporter(isPresented: $model.importerPresented,
+                      allowedContentTypes: [.movie, .mpeg4Movie, .quickTimeMovie]) { result in
+            switch result {
+            case .success(let url): model.open(url: url)
+            case .failure(let error): model.showToast("Dosya seçilemedi: \(error.localizedDescription)")
+            }
+        }
+        .sheet(item: $model.shareItem) { item in
+            ActivityView(items: [item.url])
+        }
+    }
+
+    private var isTesting: Bool { model.equality != nil || model.toneTestActive }
+
+    private var labChrome: some View {
             VStack(spacing: 8) {
                 HStack(alignment: .top) {
                     NitLabHUD(snapshot: model.snapshot, params: model.params,
@@ -56,22 +84,6 @@ struct NitLabScreen: View {
             .padding(.vertical, 8)
             .animation(.easeOut(duration: 0.2), value: model.chromeVisible)
             .animation(.easeOut(duration: 0.2), value: model.toast)
-        }
-        .background(Color.black)
-        .statusBarHidden(true)
-        .persistentSystemOverlays(.hidden)
-        .onAppear { model.appear() }
-        .onDisappear { model.disappear() }
-        .fileImporter(isPresented: $model.importerPresented,
-                      allowedContentTypes: [.movie, .mpeg4Movie, .quickTimeMovie]) { result in
-            switch result {
-            case .success(let url): model.open(url: url)
-            case .failure(let error): model.showToast("Dosya seçilemedi: \(error.localizedDescription)")
-            }
-        }
-        .sheet(item: $model.shareItem) { item in
-            ActivityView(items: [item.url])
-        }
     }
 }
 

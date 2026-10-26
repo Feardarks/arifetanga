@@ -17,6 +17,7 @@ struct NitUniforms {
     var tone = SIMD4<Float>.zero
     var dither = SIMD4<Float>.zero
     var pattern = SIMD4<Float>.zero
+    var scaler = SIMD4<Float>.zero
 }
 
 enum SourcePrimaries: String {
@@ -104,6 +105,8 @@ struct RenderSettings: Equatable {
     var referenceWhiteNits: Double
     var dither: Bool
     var ditherBits: Int
+    /// Kaliteli ölçekleyici: büyütmede bicubic, küçültmede 2×2 süper örnekleme. Kapalıysa bilineer.
+    var highQualityScaler: Bool
 }
 
 /// Son N karenin GPU süreleri; Metal tamamlanma işleyicisinden (başka thread) yazılır.
@@ -186,6 +189,42 @@ final class NitRenderer {
         layer.backgroundColor = CGColor(gray: 0, alpha: 1)
     }
 
+    /// Eşitlik testinin Referans yaması için katman: PQ renk uzayı + HDR10 meta verisi.
+    /// Ton eşlemeyi sistem yapar; Apple'ın kendi HDR beyazı bununla ölçülür (AS-26, K2).
+    static func configureReference(_ layer: CAMetalLayer, device: MTLDevice, maxNits: Double) {
+        layer.device = device
+        layer.pixelFormat = .rgba16Float
+        layer.colorspace = CGColorSpace(name: CGColorSpace.itur_2100_PQ)
+        layer.wantsExtendedDynamicRangeContent = true
+        layer.edrMetadata = CAEDRMetadata.hdr10(minLuminance: 0.0001, maxLuminance: Float(maxNits), opticalOutputScale: 100)
+        layer.framebufferOnly = true
+        layer.maximumDrawableCount = 3
+        layer.isOpaque = true
+        layer.backgroundColor = CGColor(gray: 0, alpha: 1)
+    }
+
+    /// Referans yamasını çizer: PQ kodu doğrudan yazılır.
+    func renderReferencePatch(layer: CAMetalLayer, windowFraction: Double, centerX: Double, nits: Double) {
+        guard let drawable = layer.nextDrawable(),
+              let commandBuffer = queue.makeCommandBuffer() else { return }
+        let pass = MTLRenderPassDescriptor()
+        pass.colorAttachments[0].texture = drawable.texture
+        pass.colorAttachments[0].loadAction = .clear
+        pass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+        pass.colorAttachments[0].storeAction = .store
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: pass) else { return }
+        encoder.setRenderPipelineState(pipeline)
+        encoder.setFragmentTexture(dummyLuma, index: 0)
+        encoder.setFragmentTexture(dummyChroma, index: 1)
+        var u = NitUniforms()
+        u.pattern = SIMD4(Float(PatternKind.pqReference.rawValue), Float(windowFraction), Float(PQ.inverseEOTF(nits)), Float(centerX))
+        encoder.setFragmentBytes(&u, length: MemoryLayout<NitUniforms>.stride, index: 0)
+        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+        encoder.endEncoding()
+        commandBuffer.present(drawable)
+        commandBuffer.commit()
+    }
+
     /// Bir kare çizer. `pattern` verilirse piksel tamponu yok sayılır.
     /// - Returns: Bu karede çıkışın ulaşabileceği en yüksek EDR değeri (analitik; P-2 denetimi için).
     @discardableResult
@@ -194,7 +233,8 @@ final class NitRenderer {
                 format: FrameFormat?,
                 pattern: PatternSpec?,
                 settings: RenderSettings,
-                headroom: Double) -> Double {
+                headroom: Double,
+                presentAt: CFTimeInterval? = nil) -> Double {
         guard let drawable = layer.nextDrawable(),
               let commandBuffer = queue.makeCommandBuffer() else { return 0 }
 
@@ -214,7 +254,7 @@ final class NitRenderer {
         if let pattern {
             encoder.setFragmentTexture(dummyLuma, index: 0)
             encoder.setFragmentTexture(dummyChroma, index: 1)
-            u.pattern = SIMD4(Float(pattern.kind.rawValue), Float(pattern.windowFraction), Float(pattern.levelNits), 0)
+            u.pattern = SIMD4(Float(pattern.kind.rawValue), Float(pattern.windowFraction), Float(pattern.levelNits), Float(pattern.centerX))
             isHDR = pattern.kind.isHDR
             // Desenler doğrusal P3'e doğrudan yazılır: SDR desenleri 709, PQ desenleri 2020 primerli kabul edilir.
             setGamut(&u, from: isHDR ? .bt2020 : .bt709)
@@ -224,9 +264,12 @@ final class NitRenderer {
             keepAlive = [luma, chroma]
             encoder.setFragmentTexture(CVMetalTextureGetTexture(luma), index: 0)
             encoder.setFragmentTexture(CVMetalTextureGetTexture(chroma), index: 1)
-            encoder.setViewport(aspectFitViewport(content: CGSize(width: CVPixelBufferGetWidth(pixelBuffer),
-                                                                   height: CVPixelBufferGetHeight(pixelBuffer)),
-                                                  in: drawableSize))
+            let sourceWidth = Double(CVPixelBufferGetWidth(pixelBuffer))
+            let viewport = aspectFitViewport(content: CGSize(width: sourceWidth, height: Double(CVPixelBufferGetHeight(pixelBuffer))),
+                                             in: drawableSize)
+            encoder.setViewport(viewport)
+            u.scaler = SIMD4(settings.highQualityScaler ? 1 : 0, Float(viewport.width / max(sourceWidth, 1)),
+                             Float(1 / max(viewport.width, 1)), Float(1 / max(viewport.height, 1)))
             let storage = format.bitDepth == 10 ? 65535.0 / 64.0 : 255.0
             let range = YCbCrRange.make(bitDepth: format.bitDepth, fullRange: format.fullRange, storageScale: storage)
             u.yRange = SIMD4(Float(range.yOffset), Float(range.yScale), Float(range.cOffset), Float(range.cScale))
@@ -253,7 +296,12 @@ final class NitRenderer {
         encoder.setFragmentBytes(&u, length: MemoryLayout<NitUniforms>.stride, index: 0)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         encoder.endEncoding()
-        commandBuffer.present(drawable)
+        // Hedef vsync'e hizalı sunum (02-cozum §3.8).
+        if let presentAt {
+            commandBuffer.present(drawable, atTime: presentAt)
+        } else {
+            commandBuffer.present(drawable)
+        }
 
         let stats = gpuStats
         let textures = keepAlive

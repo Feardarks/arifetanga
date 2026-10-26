@@ -14,10 +14,15 @@ enum PatternKind: Int, CaseIterable, Identifiable {
     case rampDark = 4
     case sdrGrayRamp = 5
     case readability = 6
+    /// Eşitlik testindeki Referans yaması (PQ katmanına doğrudan PQ kodu). Dosya panelinde görünmez.
+    case pqReference = 7
+
+    /// Dosya panelinde listelenen desenler.
+    static let panelCases: [PatternKind] = [.sdrWindow, .pqWindow, .rampFine, .rampDark, .sdrGrayRamp, .readability]
 
     var id: Int { rawValue }
 
-    var isHDR: Bool { self == .pqWindow || self == .readability }
+    var isHDR: Bool { self == .pqWindow || self == .readability || self == .pqReference }
 
     var title: String {
         switch self {
@@ -27,6 +32,7 @@ enum PatternKind: Int, CaseIterable, Identifiable {
         case .rampDark: "Rampa · karanlık (AS-33)"
         case .sdrGrayRamp: "SDR gri rampa (gama)"
         case .readability: "Okunabilirlik deseni (K-T1)"
+        case .pqReference: "Referans PQ yaması"
         }
     }
 
@@ -39,6 +45,8 @@ struct PatternSpec: Equatable {
     var windowFraction: Double = 0.10
     /// PQ desenleri için mutlak nit.
     var levelNits: Double = 1000
+    /// Pencerenin yatay merkezi (0–1); eşitlik testinde 0,25 ya da 0,75.
+    var centerX: Double = 0.5
 
     var label: String {
         var parts = [kind.title]
@@ -72,6 +80,7 @@ struct NitParams: Equatable {
     var ditherBits = 10
     var sdrGamma = 2.4
     var referenceWhiteNits = NitTone.defaultReferenceWhiteNits
+    var highQualityScaler = true
 
     var curve: NitCurve {
         curveMode == .maximum ? NitCurve(w: maxW, kappa: maxKappa) : NitCurve(w: balancedW, kappa: balancedKappa)
@@ -79,7 +88,7 @@ struct NitParams: Equatable {
 
     var renderSettings: RenderSettings {
         RenderSettings(curve: curve, sdrGamma: sdrGamma, referenceWhiteNits: referenceWhiteNits,
-                       dither: dither, ditherBits: ditherBits)
+                       dither: dither, ditherBits: ditherBits, highQualityScaler: highQualityScaler)
     }
 
     var peakLockConfig: PeakLock.Config {
@@ -96,7 +105,7 @@ struct NitParams: Equatable {
         return "mod=\(mode.rawValue); egri=\(curveMode == .maximum ? "Maksimum" : "Dengeli"); w=\(c.w); kappa=\(c.kappa); "
             + "tau_up_ms=\(tauUpMs); olu_bant_%=\(deadbandPercent); tepe_kilidi=\(peakLock); adim=\(peakStep); "
             + "aralik_ms=\(peakIntervalMs); esik=\(peakThreshold); titresim=\(dither); b=\(ditherBits); "
-            + "sdr_gama=\(sdrGamma); L_ref=\(referenceWhiteNits)"
+            + "sdr_gama=\(sdrGamma); L_ref=\(referenceWhiteNits); olcekleyici=\(highQualityScaler ? "kaliteli" : "bilineer")"
     }
 }
 

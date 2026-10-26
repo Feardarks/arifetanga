@@ -41,7 +41,7 @@ struct FilePanel: View {
                     }
                     .pickerStyle(.segmented)
                 }
-                ForEach(PatternKind.allCases) { kind in
+                ForEach(PatternKind.panelCases) { kind in
                     Button {
                         model.open(pattern: PatternSpec(kind: kind, windowFraction: windowPercent / 100, levelNits: pqLevel))
                     } label: {
@@ -64,7 +64,7 @@ struct FilePanel: View {
     }
 
     private func section(_ title: String) -> some View {
-        Text(title.uppercased())
+        Text(title)
             .font(.caption.weight(.semibold))
             .foregroundStyle(DS.secondary)
             .padding(.top, 6)

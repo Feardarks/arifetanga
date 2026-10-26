@@ -13,7 +13,8 @@ struct NitUniforms {
     float4 curve;    // D, u_k, x_k, g
     float4 tone;     // H_eff, transfer (0 SDR, 1 PQ, 2 HLG), SDR gaması, 1 / L_ref
     float4 dither;   // açık (0/1), genlik, tohum, -
-    float4 pattern;  // tür (0 = video), pencere oranı, seviye, -
+    float4 pattern;  // tür (0 = video), pencere oranı, seviye (nit ya da PQ kodu), pencere merkezi x
+    float4 scaler;   // kalite (0 bilineer, 1 kaliteli), ölçek (hedef/kaynak), 1/hedef genişlik, 1/hedef yükseklik
 };
 
 struct VOut {
@@ -79,7 +80,7 @@ static float hash12(float2 p) {
 static float3 patternSignal(float2 uv, float4 pat, thread bool &isHDR) {
     int kind = int(pat.x);
     float half_ = 0.5 * sqrt(clamp(pat.y, 0.0, 1.0));
-    bool inside = abs(uv.x - 0.5) <= half_ && abs(uv.y - 0.5) <= half_;
+    bool inside = abs(uv.x - pat.w) <= half_ && abs(uv.y - 0.5) <= half_;
     switch (kind) {
         case 1: // SDR beyaz pencere
             isHDR = false;
@@ -105,17 +106,65 @@ static float3 patternSignal(float2 uv, float4 pat, thread bool &isHDR) {
     }
 }
 
+// Catmull-Rom bicubic, 9 bilineer örnekle (büyütme için).
+static float sampleCatmullRom(texture2d<float> tex, sampler s, float2 uv) {
+    float2 size = float2(tex.get_width(), tex.get_height());
+    float2 pos = uv * size;
+    float2 p1 = floor(pos - 0.5) + 0.5;
+    float2 f = pos - p1;
+    float2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+    float2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+    float2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+    float2 w3 = f * f * (-0.5 + 0.5 * f);
+    float2 w12 = w1 + w2;
+    float2 t0 = (p1 - 1.0) / size;
+    float2 t12 = (p1 + w2 / w12) / size;
+    float2 t3 = (p1 + 2.0) / size;
+    float r = 0.0;
+    r += tex.sample(s, float2(t0.x, t0.y)).r * w0.x * w0.y;
+    r += tex.sample(s, float2(t12.x, t0.y)).r * w12.x * w0.y;
+    r += tex.sample(s, float2(t3.x, t0.y)).r * w3.x * w0.y;
+    r += tex.sample(s, float2(t0.x, t12.y)).r * w0.x * w12.y;
+    r += tex.sample(s, float2(t12.x, t12.y)).r * w12.x * w12.y;
+    r += tex.sample(s, float2(t3.x, t12.y)).r * w3.x * w12.y;
+    r += tex.sample(s, float2(t0.x, t3.y)).r * w0.x * w3.y;
+    r += tex.sample(s, float2(t12.x, t3.y)).r * w12.x * w3.y;
+    r += tex.sample(s, float2(t3.x, t3.y)).r * w3.x * w3.y;
+    return r;
+}
+
+// Parlaklık (Y') örneklemesi: büyütmede bicubic, küçültmede (4K → 1125p) 2×2 süper örnekleme.
+static float sampleLuma(texture2d<float> tex, sampler s, float2 uv, float4 sc) {
+    if (sc.x < 0.5) {
+        return tex.sample(s, uv).r;
+    }
+    if (sc.y >= 1.0) {
+        return sampleCatmullRom(tex, s, uv);
+    }
+    float2 d = 0.25 * sc.zw;
+    return 0.25 * (tex.sample(s, uv + float2(-d.x, -d.y)).r + tex.sample(s, uv + float2(d.x, -d.y)).r
+                 + tex.sample(s, uv + float2(-d.x, d.y)).r + tex.sample(s, uv + float2(d.x, d.y)).r);
+}
+
 fragment float4 nitFragment(VOut in [[stage_in]],
                             texture2d<float> lumaTex [[texture(0)]],
                             texture2d<float> chromaTex [[texture(1)]],
                             constant NitUniforms &u [[buffer(0)]]) {
     constexpr sampler s(filter::linear, address::clamp_to_edge);
+    // Referans yaması (eşitlik testi): PQ renk uzaylı katmana PQ kodu doğrudan yazılır,
+    // ton eşlemeyi sistem yapar. Nit eğrisi uygulanmaz.
+    if (int(u.pattern.x) == 7) {
+        float half_ = 0.5 * sqrt(clamp(u.pattern.y, 0.0, 1.0));
+        bool inside = abs(in.uv.x - u.pattern.w) <= half_ && abs(in.uv.y - 0.5) <= half_;
+        return float4(float3(inside ? u.pattern.z : 0.0), 1.0);
+    }
+
     int tf = int(u.tone.y);
     bool isHDR = tf != 0;
     float3 lin;
 
     if (u.pattern.x < 0.5) {
-        float y = lumaTex.sample(s, in.uv).r;
+        float y = sampleLuma(lumaTex, s, in.uv, u.scaler);
         float2 c = chromaTex.sample(s, in.uv).rg;
         float3 ycc = float3((y - u.yRange.x) * u.yRange.y,
                             (c.x - u.yRange.z) * u.yRange.w,

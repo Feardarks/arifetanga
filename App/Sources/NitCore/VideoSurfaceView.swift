@@ -2,14 +2,30 @@ import AVFoundation
 import SwiftUI
 import UIKit
 
-/// İki katmanlı video yüzeyi (03-tasarim §9.6):
-/// altta `AVPlayerLayer` (Referans: sistemin HDR işleyişi), üstte `CAMetalLayer` (Nit Çekirdeği, EDR).
+/// Yüzeyin katman düzeni.
+enum SurfaceLayout: Equatable {
+    /// Tek yol tam ekran: Nit (`CAMetalLayer`) ya da Referans (`AVPlayerLayer`).
+    case single(RenderMode)
+    /// Eşitlik testi (S0-C): bir yarıda Nit SDR × H, diğerinde Referans PQ yaması.
+    case equality(nitOnLeft: Bool)
+    /// Denemeler arası siyah ekran (göz uyumu).
+    case blank
+    /// Tonalite testi (S0-D): solda Referans (AVPlayerLayer), sağda Nit (H = 1).
+    case tonality
+}
+
+/// Katmanlı video yüzeyi (03-tasarim §9.6):
+/// altta `AVPlayerLayer` (Referans: sistemin HDR işleyişi), üstte `CAMetalLayer` (Nit Çekirdeği, EDR),
+/// en üstte yalnızca eşitlik testinde kullanılan PQ Referans yaması katmanı.
 final class VideoSurfaceView: UIView {
     let playerLayer = AVPlayerLayer()
     let metalLayer = CAMetalLayer()
+    let referencePatchLayer = CAMetalLayer()
 
     /// Pencereye eklendiğinde ve boyut değiştiğinde çağrılır.
     var onLayout: (() -> Void)?
+
+    private(set) var layout: SurfaceLayout = .single(.nit)
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -18,6 +34,8 @@ final class VideoSurfaceView: UIView {
         playerLayer.backgroundColor = UIColor.black.cgColor
         layer.addSublayer(playerLayer)
         layer.addSublayer(metalLayer)
+        layer.addSublayer(referencePatchLayer)
+        referencePatchLayer.isHidden = true
     }
 
     @available(*, unavailable)
@@ -27,11 +45,15 @@ final class VideoSurfaceView: UIView {
         super.layoutSubviews()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        playerLayer.frame = bounds
-        metalLayer.frame = bounds
         let scale = window?.screen.nativeScale ?? traitCollection.displayScale
-        metalLayer.contentsScale = scale
-        metalLayer.drawableSize = CGSize(width: (bounds.width * scale).rounded(), height: (bounds.height * scale).rounded())
+        let pixels = CGSize(width: (bounds.width * scale).rounded(), height: (bounds.height * scale).rounded())
+        playerLayer.frame = bounds
+        for metal in [metalLayer, referencePatchLayer] {
+            metal.frame = bounds
+            metal.contentsScale = scale
+            metal.drawableSize = pixels
+        }
+        applyMasks()
         CATransaction.commit()
         onLayout?()
     }
@@ -42,13 +64,54 @@ final class VideoSurfaceView: UIView {
         onLayout?()
     }
 
-    /// Mod geçişi: yalnızca katman görünürlüğü değişir, oynatma ve ses kesilmez (K6).
-    func show(_ mode: RenderMode) {
+    /// Yalnızca katman görünürlüğü ve maskeleri değişir; oynatma ve ses kesilmez (K6).
+    func apply(_ newLayout: SurfaceLayout) {
+        layout = newLayout
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        metalLayer.isHidden = mode != .nit
-        playerLayer.isHidden = mode != .reference
+        switch newLayout {
+        case .single(let mode):
+            metalLayer.isHidden = mode != .nit
+            playerLayer.isHidden = mode != .reference
+            referencePatchLayer.isHidden = true
+        case .equality:
+            metalLayer.isHidden = false
+            playerLayer.isHidden = true
+            referencePatchLayer.isHidden = false
+        case .blank:
+            metalLayer.isHidden = true
+            playerLayer.isHidden = true
+            referencePatchLayer.isHidden = true
+        case .tonality:
+            metalLayer.isHidden = false
+            playerLayer.isHidden = false
+            referencePatchLayer.isHidden = true
+        }
+        applyMasks()
         CATransaction.commit()
+    }
+
+    private func applyMasks() {
+        let left = CGRect(x: 0, y: 0, width: bounds.width / 2, height: bounds.height)
+        let right = CGRect(x: bounds.width / 2, y: 0, width: bounds.width / 2, height: bounds.height)
+        switch layout {
+        case .equality(let nitOnLeft):
+            metalLayer.mask = Self.mask(nitOnLeft ? left : right)
+            referencePatchLayer.mask = Self.mask(nitOnLeft ? right : left)
+        case .tonality:
+            metalLayer.mask = Self.mask(right)
+            referencePatchLayer.mask = nil
+        case .single, .blank:
+            metalLayer.mask = nil
+            referencePatchLayer.mask = nil
+        }
+    }
+
+    private static func mask(_ rect: CGRect) -> CALayer {
+        let m = CALayer()
+        m.frame = rect
+        m.backgroundColor = UIColor.black.cgColor
+        return m
     }
 }
 

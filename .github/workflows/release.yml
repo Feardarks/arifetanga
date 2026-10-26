@@ -1,0 +1,148 @@
+name: İmzalı IPA
+
+# Elle tetiklenir. Gerekli Secrets (bkz. docs/S0-test-rehberi.md §1b):
+#   IOS_CERT_P12_BASE64, IOS_CERT_PASSWORD  — Apple Development ya da Distribution sertifikası (.p12)
+#   IOS_PROFILE_BASE64                       — Development ya da Ad Hoc provisioning profili
+#   KEYCHAIN_PASSWORD                        — geçici keychain için herhangi bir parola
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  signed:
+    name: İmzalı IPA
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      IOS_CERT_P12_BASE64: ${{ secrets.IOS_CERT_P12_BASE64 }}
+      IOS_CERT_PASSWORD: ${{ secrets.IOS_CERT_PASSWORD }}
+      IOS_PROFILE_BASE64: ${{ secrets.IOS_PROFILE_BASE64 }}
+      KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Secrets'ı denetle
+        run: |
+          missing=""
+          for name in IOS_CERT_P12_BASE64 IOS_CERT_PASSWORD IOS_PROFILE_BASE64 KEYCHAIN_PASSWORD; do
+            [ -n "${!name}" ] || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Eksik Secrets:$missing — docs/S0-test-rehberi.md §1b'ye bakın."
+            exit 1
+          fi
+
+      - name: En yeni kararlı Xcode'u seç
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_[0-9]*.app | grep -viE 'beta|release_candidate|_rc' | sort -V | tail -1)
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+
+      - name: Sertifikayı ve profili yükle
+        run: |
+          KC="$RUNNER_TEMP/imza.keychain-db"
+          echo "$IOS_CERT_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          echo "$IOS_PROFILE_BASE64" | base64 --decode > "$RUNNER_TEMP/profile.mobileprovision"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KC"
+          security set-keychain-settings -lut 21600 "$KC"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KC"
+          security import "$RUNNER_TEMP/cert.p12" -P "$IOS_CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KC"
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" "$KC" > /dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
+
+          IDENTITY=$(security find-identity -v -p codesigning "$KC" | awk 'NR==1 {print $2}')
+          [ -n "$IDENTITY" ] || { echo "::error::Keychain'de imzalama kimliği yok (p12 ya da parola hatalı)"; exit 1; }
+
+          security cms -D -i "$RUNNER_TEMP/profile.mobileprovision" > "$RUNNER_TEMP/profile.plist"
+          UUID=$(/usr/libexec/PlistBuddy -c 'Print :UUID' "$RUNNER_TEMP/profile.plist")
+          TEAM=$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$RUNNER_TEMP/profile.plist")
+          APPID=$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$RUNNER_TEMP/profile.plist")
+          BUNDLE_ID="${APPID#${TEAM}.}"
+          if [ "$BUNDLE_ID" = "*" ]; then BUNDLE_ID="com.feardarks.arifetanga"; fi
+          if /usr/libexec/PlistBuddy -c 'Print :Entitlements:get-task-allow' "$RUNNER_TEMP/profile.plist" | grep -q true; then
+            METHOD="debugging"
+          else
+            METHOD="release-testing"
+          fi
+
+          for DIR in "$HOME/Library/MobileDevice/Provisioning Profiles" "$HOME/Library/Developer/Xcode/UserData/Provisioning Profiles"; do
+            mkdir -p "$DIR"
+            cp "$RUNNER_TEMP/profile.mobileprovision" "$DIR/$UUID.mobileprovision"
+          done
+
+          echo "Profil: $UUID · ekip $TEAM · paket $BUNDLE_ID · yöntem $METHOD"
+          {
+            echo "IDENTITY=$IDENTITY"
+            echo "UUID=$UUID"
+            echo "TEAM=$TEAM"
+            echo "BUNDLE_ID=$BUNDLE_ID"
+            echo "METHOD=$METHOD"
+          } >> "$GITHUB_ENV"
+
+      - name: XcodeGen kur ve projeyi üret
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Arşivle
+        run: |
+          set -o pipefail
+          xcodebuild archive \
+            -project Arifetanga.xcodeproj \
+            -scheme Arifetanga \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/Arifetanga.xcarchive" \
+            ARIF_SIGN_STYLE=Manual \
+            ARIF_TEAM="$TEAM" \
+            ARIF_SIGN_IDENTITY="$IDENTITY" \
+            ARIF_PROFILE="$UUID" \
+            ARIF_BUNDLE_ID="$BUNDLE_ID" 2>&1 | tee archive.log | grep -E 'error:|ARCHIVE (SUCCEEDED|FAILED)|\*\* ' || true
+          test -d "$RUNNER_TEMP/Arifetanga.xcarchive"
+
+      - name: Dışa aktar
+        run: |
+          cat > "$RUNNER_TEMP/ExportOptions.plist" <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>$METHOD</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>teamID</key><string>$TEAM</string>
+            <key>signingCertificate</key><string>$IDENTITY</string>
+            <key>provisioningProfiles</key>
+            <dict><key>$BUNDLE_ID</key><string>$UUID</string></dict>
+            <key>compileBitcode</key><false/>
+            <key>stripSwiftSymbols</key><true/>
+          </dict>
+          </plist>
+          EOF
+          xcodebuild -exportArchive \
+            -archivePath "$RUNNER_TEMP/Arifetanga.xcarchive" \
+            -exportPath "$RUNNER_TEMP/export" \
+            -exportOptionsPlist "$RUNNER_TEMP/ExportOptions.plist"
+          ls -lh "$RUNNER_TEMP/export"
+
+      - name: IPA'yı yükle
+        uses: actions/upload-artifact@v4
+        with:
+          name: Arifetanga-signed-ipa
+          path: ${{ runner.temp }}/export/*.ipa
+          retention-days: 14
+
+      - name: Günlükleri yükle (hata durumunda)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-logs
+          path: archive.log
+          retention-days: 7
+
+      - name: Keychain'i sil
+        if: always()
+        run: security delete-keychain "$RUNNER_TEMP/imza.keychain-db" || true

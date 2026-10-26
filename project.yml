@@ -10,10 +10,17 @@ options:
 
 settings:
   base:
-    MARKETING_VERSION: "0.1.0"
-    CURRENT_PROJECT_VERSION: "1"
+    MARKETING_VERSION: "0.2.0"
+    CURRENT_PROJECT_VERSION: "2"
     SWIFT_VERSION: "5.0"
     SWIFT_STRICT_CONCURRENCY: minimal
+    # İmza ayarları yalnızca uygulama hedefinin okuduğu değişkenlerle verilir; release.yml bunları
+    # komut satırından ezer. Doğrudan PROVISIONING_PROFILE_SPECIFIER vermek SPM paketlerini kırar.
+    ARIF_BUNDLE_ID: com.feardarks.arifetanga
+    ARIF_SIGN_STYLE: Automatic
+    ARIF_SIGN_IDENTITY: Apple Development
+    ARIF_PROFILE: ""
+    ARIF_TEAM: ""
 
 packages:
   NitMath:
@@ -47,10 +54,13 @@ targets:
         ITSAppUsesNonExemptEncryption: false
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.feardarks.arifetanga
+        PRODUCT_BUNDLE_IDENTIFIER: $(ARIF_BUNDLE_ID)
         TARGETED_DEVICE_FAMILY: "1"
         SUPPORTS_MACCATALYST: NO
-        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_STYLE: $(ARIF_SIGN_STYLE)
+        CODE_SIGN_IDENTITY: $(ARIF_SIGN_IDENTITY)
+        PROVISIONING_PROFILE_SPECIFIER: $(ARIF_PROFILE)
+        DEVELOPMENT_TEAM: $(ARIF_TEAM)
         ENABLE_USER_SCRIPT_SANDBOXING: YES
         MTL_FAST_MATH: YES
     scheme:

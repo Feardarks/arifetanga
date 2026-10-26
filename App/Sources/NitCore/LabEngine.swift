@@ -9,6 +9,21 @@ import UIKit
 /// `AVPlayerItemVideoOutput`'tan alır; Referans yolu aynı oynatıcının `AVPlayerLayer`'ıdır.
 /// Böylece iki yol aynı saatte kalır ve geçiş yalnızca katman görünürlüğüdür (K6).
 /// MKV/FFmpeg ile kendi demux ve VideoToolbox hattımız S2'de gelir (02-cozum §10.2).
+/// Laboratuvarın çalışma kipi: normal oynatma ya da testlerden biri.
+enum LabMode: Equatable {
+    case normal
+    case equality(EqualityTrial)
+    case tonality
+}
+
+/// Eşitlik testinin (S0-C) tek denemesi.
+struct EqualityTrial: Equatable {
+    var windowFraction: Double
+    var levelNits: Double
+    var nitOnLeft: Bool
+    var blank = false
+}
+
 @MainActor
 final class LabEngine: NSObject {
     let surface = VideoSurfaceView()
@@ -26,6 +41,7 @@ final class LabEngine: NSObject {
 
     private(set) var source: LabSource = .none
     private(set) var rendererAvailable: Bool
+    private(set) var labMode: LabMode = .normal
 
     private let renderer: NitRenderer?
     private let player = AVPlayer()
@@ -58,6 +74,7 @@ final class LabEngine: NSObject {
     private var initialBrightness: Double?
     private var switchStart: CFTimeInterval?
     private var lastParamEvent: CFTimeInterval = 0
+    private var referencePatchDirty = true
 
     override init() {
         renderer = NitRenderer()
@@ -69,8 +86,11 @@ final class LabEngine: NSObject {
             snapshot.errorMessage = "Metal başlatılamadı"
         }
         surface.playerLayer.player = player
-        surface.show(params.mode)
-        surface.onLayout = { [weak self] in self?.needsRender = true }
+        surface.apply(.single(params.mode))
+        surface.onLayout = { [weak self] in
+            self?.needsRender = true
+            self?.referencePatchDirty = true
+        }
         player.preventsDisplaySleepDuringVideoPlayback = true
         filter = HeadroomFilter(tauUp: params.tauUpMs / 1000, deadband: params.deadbandPercent / 100)
         peakLock = PeakLock(config: params.peakLockConfig, enabled: params.peakLock)
@@ -105,6 +125,7 @@ final class LabEngine: NSObject {
     // MARK: Kaynaklar
 
     func load(url: URL) {
+        endTest()
         releaseAccess()
         if url.startAccessingSecurityScopedResource() { accessedURL = url }
         resetFrameState()
@@ -130,6 +151,7 @@ final class LabEngine: NSObject {
     }
 
     func showPattern(_ spec: PatternSpec) {
+        endTest()
         player.pause()
         resetFrameState()
         source = .pattern(spec)
@@ -160,6 +182,58 @@ final class LabEngine: NSObject {
     func resetKnee() {
         peakLock.resetKnee()
         event("b_k sıfırlandı")
+    }
+
+    // MARK: Testler
+
+    /// Tonalite testinde gerçek SDR video gerekir: soldaki Referans yolu Apple'ın SDR video işleyişidir.
+    var canRunToneTest: Bool {
+        if case .file = source, let currentFormat { return !currentFormat.transfer.isHDR }
+        return false
+    }
+
+    /// Eşitlik testi denemesi: bir yarıda Nit SDR × H, diğerinde sistemin ton eşlediği PQ beyaz.
+    func beginEqualityTrial(windowFraction: Double, levelNits: Double, nitOnLeft: Bool) {
+        player.pause()
+        if let renderer {
+            NitRenderer.configureReference(surface.referencePatchLayer, device: renderer.device, maxNits: levelNits)
+        }
+        labMode = .equality(EqualityTrial(windowFraction: windowFraction, levelNits: levelNits, nitOnLeft: nitOnLeft))
+        surface.apply(.equality(nitOnLeft: nitOnLeft))
+        updatePeakLockEnabled()
+        referencePatchDirty = true
+        needsRender = true
+    }
+
+    /// Denemeler arası siyah ekran.
+    func blankEquality() {
+        guard case .equality(var trial) = labMode else { return }
+        trial.blank = true
+        labMode = .equality(trial)
+        surface.apply(.blank)
+    }
+
+    func beginToneTest() {
+        guard canRunToneTest else { return }
+        labMode = .tonality
+        surface.apply(.tonality)
+        updatePeakLockEnabled()
+        needsRender = true
+        event("Tonalite testi başladı")
+    }
+
+    func endTest() {
+        guard labMode != .normal else { return }
+        labMode = .normal
+        surface.apply(.single(params.mode))
+        updatePeakLockEnabled()
+        needsRender = true
+        event("Test bitti")
+    }
+
+    private func updatePeakLockEnabled() {
+        // Tonalite testinde iki yarı aynı SDR beyazında karşılaştırılır; parlaklık sabit kalmalı.
+        peakLock.enabled = params.peakLock && params.mode == .nit && labMode != .tonality
     }
 
     func exportCSV() throws -> URL {
@@ -234,10 +308,10 @@ final class LabEngine: NSObject {
         filter.tauUp = params.tauUpMs / 1000
         filter.deadband = params.deadbandPercent / 100
         peakLock.config = params.peakLockConfig
-        peakLock.enabled = params.peakLock && params.mode == .nit
-        if params.mode != old.mode {
+        updatePeakLockEnabled()
+        if params.mode != old.mode, labMode == .normal {
             switchStart = CACurrentMediaTime()
-            surface.show(params.mode)
+            surface.apply(.single(params.mode))
         }
         telemetry.setParams(params.csvSummary)
         needsRender = true
@@ -338,15 +412,40 @@ final class LabEngine: NSObject {
             needsRender = true
         }
 
-        if params.mode == .nit, needsRender, let renderer {
-            var pattern: PatternSpec?
-            if case .pattern(let p) = source { pattern = p }
-            snapshot.outputMax = renderer.render(layer: surface.metalLayer, pixelBuffer: currentBuffer, format: currentFormat,
-                                                 pattern: pattern, settings: params.renderSettings, headroom: hEff)
+        if needsRender, let renderer {
+            let presentAt = link.targetTimestamp
+            switch labMode {
+            case .normal:
+                if params.mode == .nit {
+                    var pattern: PatternSpec?
+                    if case .pattern(let p) = source { pattern = p }
+                    snapshot.outputMax = renderer.render(layer: surface.metalLayer, pixelBuffer: currentBuffer, format: currentFormat,
+                                                         pattern: pattern, settings: params.renderSettings, headroom: hEff,
+                                                         presentAt: presentAt)
+                } else {
+                    snapshot.outputMax = 0
+                }
+            case .equality(let trial):
+                if !trial.blank {
+                    let nitCenter = trial.nitOnLeft ? 0.25 : 0.75
+                    let spec = PatternSpec(kind: .sdrWindow, windowFraction: trial.windowFraction, levelNits: trial.levelNits,
+                                           centerX: nitCenter)
+                    snapshot.outputMax = renderer.render(layer: surface.metalLayer, pixelBuffer: nil, format: nil, pattern: spec,
+                                                         settings: params.renderSettings, headroom: hEff, presentAt: presentAt)
+                    if referencePatchDirty {
+                        renderer.renderReferencePatch(layer: surface.referencePatchLayer, windowFraction: trial.windowFraction,
+                                                      centerX: 1 - nitCenter, nits: trial.levelNits)
+                        referencePatchDirty = false
+                    }
+                }
+            case .tonality:
+                // Sağ yarı: Nit yolu, H = 1'e zorlanmış; sol yarıdaki Apple SDR video işleyişiyle aynı beyazda.
+                snapshot.outputMax = renderer.render(layer: surface.metalLayer, pixelBuffer: currentBuffer, format: currentFormat,
+                                                     pattern: nil, settings: params.renderSettings, headroom: 1,
+                                                     presentAt: presentAt)
+            }
             lastRenderedHeadroom = hEff
             needsRender = false
-        } else if params.mode == .reference {
-            snapshot.outputMax = 0
         }
 
         if let start = switchStart {

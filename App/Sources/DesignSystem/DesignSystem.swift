@@ -3,12 +3,15 @@ import SwiftUI
 /// Tasarım sisteminin S0'da gereken en küçük alt kümesi (03-tasarim §6).
 /// Arayüz SDR'da kalır; Nit modunda video SDR beyazının katlarına çıktığı için zeminler opaktır.
 enum DS {
-    static let amber = Color(red: 1.0, green: 0.72, blue: 0.20)
-    static let red = Color(red: 1.0, green: 0.33, blue: 0.30)
-    static let green = Color(red: 0.35, green: 0.85, blue: 0.45)
+    // P3 tanımlı durum renkleri (03-tasarim §6); SDR'da kalır, EDR'ye çıkmaz.
+    static let amber = Color(.displayP3, red: 1.0, green: 0.72, blue: 0.20)
+    static let red = Color(.displayP3, red: 1.0, green: 0.33, blue: 0.30)
+    static let green = Color(.displayP3, red: 0.35, green: 0.85, blue: 0.45)
     static let secondary = Color.white.opacity(0.62)
     static let hairline = Color.white.opacity(0.14)
     static let islandRadius: CGFloat = 16
+    /// HIG en küçük dokunma hedefi.
+    static let minTouch: CGFloat = 44
     static let mono = Font.system(size: 12, weight: .regular, design: .monospaced)
     static let monoSmall = Font.system(size: 11, weight: .regular, design: .monospaced)
 }
@@ -47,10 +50,12 @@ struct SegmentToggle<T: Hashable>: View {
                     Text(option.1)
                         .font(.system(size: 14, weight: .semibold))
                         .padding(.horizontal, 12)
-                        .frame(height: 32)
+                        .frame(height: 36)
                         .foregroundStyle(selection == option.0 ? Color.black : Color.white)
                         .background(selection == option.0 ? Color.white : Color.clear,
                                     in: Capsule(style: .continuous))
+                        .frame(minHeight: DS.minTouch)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
             }
@@ -78,10 +83,11 @@ struct PillButton: View {
                 }
             }
             .padding(.horizontal, 12)
-            .frame(height: 32)
+            .frame(height: 36)
             .foregroundStyle(Color.white)
             .overlay(Capsule(style: .continuous).stroke(DS.hairline, lineWidth: 1))
-            .contentShape(Capsule())
+            .frame(minHeight: DS.minTouch)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .opacity(disabled ? 0.35 : 1)
