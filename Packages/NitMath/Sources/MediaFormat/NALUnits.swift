@@ -114,7 +114,8 @@ public enum NALUnits {
         let depth = UInt8(clamping: max(bitDepth - 8, 0)) & 0x07
         var r: [UInt8] = [1]
         r.append(contentsOf: rbsp[1...12])
-        r += [0xF0, 0x00, 0xFC, 0xFD, 0xF8 | depth, 0xF8 | depth, 0x00, 0x00]
+        let fixed: [UInt8] = [0xF0, 0x00, 0xFC, 0xFD, 0xF8 | depth, 0xF8 | depth, 0x00, 0x00]
+        r += fixed
         let subLayers = ((rbsp[0] >> 1) & 0x07) + 1
         let nested = rbsp[0] & 0x01
         r.append((subLayers << 3) | (nested << 2) | 0x03)
@@ -162,7 +163,8 @@ public enum NALUnits {
         // High profilleri için uzantı: 4:2:0, bit derinliği, SPS uzantısı yok.
         if [100, 110, 122, 144].contains(head[1]) {
             let depth = UInt8(clamping: max(bitDepth - 8, 0)) & 0x07
-            r += [0xFC | 0x01, 0xF8 | depth, 0xF8 | depth, 0x00]
+            let tail: [UInt8] = [0xFD, 0xF8 | depth, 0xF8 | depth, 0x00]
+            r += tail
         }
         return Data(r)
     }

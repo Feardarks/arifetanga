@@ -103,16 +103,17 @@ final class NativeDemuxer {
     let info: VideoStreamInfo
 
     init(path: String) throws {
-        var ctx: UnsafeMutablePointer<AVFormatContext>?
-        let openResult = avformat_open_input(&ctx, path, nil, nil)
-        guard openResult >= 0, let ctx else { throw DemuxError.open(Self.errorString(openResult)) }
+        // `opened` kapatma için isteğe bağlı kalır; `ctx` açık bağlamın kendisidir.
+        var opened: UnsafeMutablePointer<AVFormatContext>?
+        let openResult = avformat_open_input(&opened, path, nil, nil)
+        guard openResult >= 0, let ctx = opened else { throw DemuxError.open(Self.errorString(openResult)) }
         guard avformat_find_stream_info(ctx, nil) >= 0 else {
-            avformat_close_input(&ctx)
+            avformat_close_input(&opened)
             throw DemuxError.open("akış bilgisi okunamadı")
         }
         let index = av_find_best_stream(ctx, AVMEDIA_TYPE_VIDEO, -1, -1, nil, 0)
         guard index >= 0, let stream = ctx.pointee.streams[Int(index)] else {
-            avformat_close_input(&ctx)
+            avformat_close_input(&opened)
             throw DemuxError.noVideo
         }
         // Diğer akışları yok say: paket okuma maliyeti düşer.
@@ -122,7 +123,7 @@ final class NativeDemuxer {
         do {
             info = try Self.makeInfo(stream: stream, context: ctx)
         } catch {
-            avformat_close_input(&ctx)
+            avformat_close_input(&opened)
             throw error
         }
         context = ctx

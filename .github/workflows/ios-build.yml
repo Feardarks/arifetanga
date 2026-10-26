@@ -71,7 +71,9 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
             build 2>&1 | tee build.log | grep -E 'error:|warning: .*(deprecated|Sendable)|BUILD (SUCCEEDED|FAILED)|\*\* ' || true
-          test -d build/Build/Products/Release-iphoneos/Arifetanga.app
+          # .app klasörü derleme başarısız olsa da oluşur; asıl ölçüt BUILD SUCCEEDED ve uygulama ikilisi.
+          grep -q '\*\* BUILD SUCCEEDED \*\*' build.log
+          test -f build/Build/Products/Release-iphoneos/Arifetanga.app/Arifetanga
 
       - name: IPA paketle
         run: |

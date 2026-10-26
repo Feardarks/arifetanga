@@ -113,7 +113,8 @@ jobs:
             ARIF_SIGN_IDENTITY="$IDENTITY" \
             ARIF_PROFILE="$UUID" \
             ARIF_BUNDLE_ID="$BUNDLE_ID" 2>&1 | tee archive.log | grep -E 'error:|ARCHIVE (SUCCEEDED|FAILED)|\*\* ' || true
-          test -d "$RUNNER_TEMP/Arifetanga.xcarchive"
+          grep -q '\*\* ARCHIVE SUCCEEDED \*\*' archive.log
+          test -f "$RUNNER_TEMP/Arifetanga.xcarchive/Products/Applications/Arifetanga.app/Arifetanga"
 
       - name: Dışa aktar
         run: |
