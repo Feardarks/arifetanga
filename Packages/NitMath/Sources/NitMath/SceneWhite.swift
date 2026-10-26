@@ -4,7 +4,7 @@ import Foundation
 ///
 /// Girdi: kaynak karenin 256 kutulu PQ(maxRGB) histogramı (Metal'de 1/4 çözünürlükte üretilir).
 /// Çıkış: `L_ref` (nit). Eğri yalnızca girdiyi ölçekler: `x = L / L_ref`; P-2 her `L_ref` için korunur.
-/// Bu sürüm HDR10/HLG histogram yolunu uygular; DV L1/L2/L8 yolu S2'de eklenir.
+/// İki giriş yolu vardır: HDR10/HLG için histogram, DV için RPU L1 (S2.3). L2/L8 trim düzeltmesi sonra gelir.
 public struct SceneWhiteEstimator: Sendable {
     public struct Config: Equatable, Sendable {
         /// Diffuse beyaz yüzdeliği (yalnızca ≥ `minNits` pikseller üzerinden).
@@ -35,6 +35,8 @@ public struct SceneWhiteEstimator: Sendable {
         public var cutHistory = 2.0
         public var minCutGap = 0.5
         public var anchorRateStopsPerMinute = 0.1
+        /// DV L1: algısal ortalamanın ≈ 2 stop üstü (AS-38'de kalibre edilir).
+        public var doviK = 4.0
 
         public init() {}
     }
@@ -61,6 +63,7 @@ public struct SceneWhiteEstimator: Sendable {
 
     private var initialized = false
     private var pendingCut = false
+    private var previousL1White: Double?
     private var lastTime: Double?
     private var previousCDF: [Double]?
     private var cutHistory: [(time: Double, d: Double)] = []
@@ -132,8 +135,40 @@ public struct SceneWhiteEstimator: Sendable {
         }
         previousCDF = cdf
         state.cutDistance = distance
-        state.cut = cut
+        return ingest(frameWhite: frameWhite, time: time, dt: dt, cut: cut)
+    }
 
+    /// Dolby Vision L1 yolu (02-cozum §3.5.1, öncelik 1): `W_s = min(k · PQ⁻¹(avg), PQ⁻¹(max))`.
+    /// L1 değerleri 12-bit PQ kodudur (0–4095). Kesim: RPU `scene_refresh_flag` ya da L1 değişimi.
+    /// L1 çekim boyunca sabit olduğundan çekim içinde pompalama yapısal olarak olamaz.
+    @discardableResult
+    public mutating func update(l1AveragePQ: UInt16, l1MaxPQ: UInt16, time: Double, sceneRefresh: Bool,
+                                forceCut: Bool = false, maxCLL: Double? = nil) -> Double {
+        let dt = min(max(time - (lastTime ?? time), 0), 0.5)
+        lastTime = time
+        let average = PQ.eotf(Double(l1AveragePQ) / 4095)
+        let maximum = PQ.eotf(Double(l1MaxPQ) / 4095)
+        var raw = min(config.doviK * average, maximum)
+        if let cll = maxCLL, cll > 0 { raw = min(raw, cll) }
+        let white: Double? = raw >= config.minNits ? raw : nil
+        state.frameWhite = white
+
+        // L1 değişimi çekim kesimidir. Her karede oynayan kodlamalarda pompalamayı önlemek için
+        // ölü bölgeden (0,1 stop) küçük değişimler kesim sayılmaz ve kesimler en az 0,5 s arayla olur.
+        let rawLog = log2(max(raw, 1e-3))
+        let changed = previousL1White.map { abs(rawLog - $0) >= config.deadbandStops } ?? true
+        previousL1White = rawLog
+        let changeCut = changed && time - lastCutTime >= config.minCutGap
+        let cut = forceCut || pendingCut || !initialized || sceneRefresh || changeCut
+        pendingCut = false
+        previousCDF = nil
+        state.cutDistance = 0
+        return ingest(frameWhite: white, time: time, dt: dt, cut: cut)
+    }
+
+    /// Kesim kararından sonraki ortak yol: ön süzgeç, sahne içi sınırlar, çapa ve son sınırlar.
+    private mutating func ingest(frameWhite: Double?, time: Double, dt: Double, cut: Bool) -> Double {
+        state.cut = cut
         if cut {
             lastCutTime = time
             ring.removeAll()
@@ -265,5 +300,34 @@ public struct SceneWhiteEstimator: Sendable {
         state.anchor = pow(2, anchorLog)
         state.referenceWhite = reference
         return reference
+    }
+}
+
+/// Dolby Vision L1'in kullanılabilirliği (02-cozum §3.5.1): dönüştürülmüş bazı RPU'larda L1 sabit ya da
+/// varsayılandır. İlk 2 dakikada hiç değişmiyorsa ya da `max_pq` 4095 ise geçersizdir; histograma dönülür.
+public struct DolbyVisionL1Validity: Sendable {
+    public private(set) var isValid = true
+    private var first: (UInt16, UInt16)?
+    private var firstTime: Double?
+    private var changed = false
+
+    public init() {}
+
+    @discardableResult
+    public mutating func observe(averagePQ: UInt16, maxPQ: UInt16, time: Double) -> Bool {
+        guard isValid else { return false }
+        if maxPQ >= 4095 {
+            isValid = false
+            return false
+        }
+        let value = (averagePQ, maxPQ)
+        if let first {
+            if !changed, first != value { changed = true }
+        } else {
+            first = value
+            firstTime = time
+        }
+        if !changed, let t0 = firstTime, time - t0 >= 120 { isValid = false }
+        return isValid
     }
 }

@@ -161,4 +161,82 @@ final class SceneWhiteTests: XCTestCase {
             }
         }
     }
+
+    // MARK: Dolby Vision L1 yolu
+
+    private func pqCode(_ nits: Double) -> UInt16 { UInt16((PQ.inverseEOTF(nits) * 4095).rounded()) }
+
+    func testDolbyVisionL1UsesKTimesAverageCappedByMax() {
+        var e = SceneWhiteEstimator(initialAnchor: 120)
+        var t = 0.0
+        for _ in 0..<Int(5 * fps) {
+            e.update(l1AveragePQ: pqCode(30), l1MaxPQ: pqCode(1000), time: t, sceneRefresh: false)
+            t += 1 / fps
+        }
+        XCTAssertEqual(e.state.referenceWhite, 120, accuracy: 120 * 0.03, "W = min(4 × 30, 1000)")
+
+        var capped = SceneWhiteEstimator(initialAnchor: 120)
+        t = 0
+        for _ in 0..<Int(5 * fps) {
+            capped.update(l1AveragePQ: pqCode(40), l1MaxPQ: pqCode(110), time: t, sceneRefresh: false)
+            t += 1 / fps
+        }
+        XCTAssertEqual(capped.state.referenceWhite, 110, accuracy: 110 * 0.03, "W = min(160, 110)")
+    }
+
+    func testDolbyVisionSceneRefreshIsACut() {
+        var e = SceneWhiteEstimator(initialAnchor: 150)
+        var t = 0.0
+        for _ in 0..<Int(10 * fps) {
+            e.update(l1AveragePQ: pqCode(30), l1MaxPQ: pqCode(1000), time: t, sceneRefresh: false)
+            t += 1 / fps
+        }
+        let scenes = e.state.sceneCount
+        e.update(l1AveragePQ: pqCode(50), l1MaxPQ: pqCode(1000), time: t, sceneRefresh: true)
+        t += 1 / fps
+        for _ in 0..<Int(2 * fps) {
+            e.update(l1AveragePQ: pqCode(50), l1MaxPQ: pqCode(1000), time: t, sceneRefresh: false)
+            t += 1 / fps
+        }
+        XCTAssertEqual(e.state.sceneCount, scenes + 1)
+        // Yeni sahne beyazı 200 nit; çapa 150 · 2^0,5 ≈ 212 sınırının altında kalır.
+        XCTAssertEqual(e.state.referenceWhite, 200, accuracy: 200 * 0.03)
+    }
+
+    func testDolbyVisionPerFrameL1DoesNotCutEveryFrame() {
+        var e = SceneWhiteEstimator(initialAnchor: 120)
+        var t = 0.0
+        for i in 0..<Int(10 * fps) {
+            let avg = i % 2 == 0 ? pqCode(29.5) : pqCode(30.5)
+            e.update(l1AveragePQ: avg, l1MaxPQ: pqCode(1000), time: t, sceneRefresh: false)
+            t += 1 / fps
+        }
+        XCTAssertEqual(e.state.sceneCount, 1, "0,1 stop altındaki L1 oynaması kesim değil")
+
+        var jumpy = SceneWhiteEstimator(initialAnchor: 120)
+        t = 0
+        for i in 0..<Int(10 * fps) {
+            let avg = i % 2 == 0 ? pqCode(25) : pqCode(35)
+            jumpy.update(l1AveragePQ: avg, l1MaxPQ: pqCode(1000), time: t, sceneRefresh: false)
+            t += 1 / fps
+        }
+        XCTAssertLessThanOrEqual(jumpy.state.sceneCount, 21, "En az 0,5 s arayla kesim")
+    }
+
+    func testL1ValidityRules() {
+        var constant = DolbyVisionL1Validity()
+        for i in 0...(121 * 24) {
+            constant.observe(averagePQ: 1000, maxPQ: 3000, time: Double(i) / 24)
+        }
+        XCTAssertFalse(constant.isValid, "2 dakika değişmeyen L1 geçersiz")
+
+        var saturated = DolbyVisionL1Validity()
+        XCTAssertFalse(saturated.observe(averagePQ: 1000, maxPQ: 4095, time: 0))
+
+        var live = DolbyVisionL1Validity()
+        for i in 0...(130 * 24) {
+            live.observe(averagePQ: UInt16(1000 + (i / 240) % 3), maxPQ: 3000, time: Double(i) / 24)
+        }
+        XCTAssertTrue(live.isValid)
+    }
 }
