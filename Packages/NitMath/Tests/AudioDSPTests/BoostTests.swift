@@ -16,7 +16,7 @@ private func rootMeanSquare(_ x: ArraySlice<Float>) -> Float {
 }
 
 /// Zinciri 1024 karelik bloklarla işler; sonuna gecikme kadar sıfır eklenir (tüm girdi çıkar).
-private func run(_ chain: BoostChain, _ input: [Float], flush: Bool = true) -> (out: [Float], stats: [BoostBlockStats]) {
+private func runChain(_ chain: BoostChain, _ input: [Float], flush: Bool = true) -> (out: [Float], stats: [BoostBlockStats]) {
     let C = chain.channels
     var data = input
     if flush { data += [Float](repeating: 0, count: chain.latency * C) }
@@ -83,11 +83,11 @@ final class BoostTests: XCTestCase {
             }
             let chain = BoostChain(sampleRate: 48000, weights: [1, 1], config: BoostConfig(percent: 150, mode: mode),
                                    managerLookahead: 0.1)
-            let (out, stats) = run(chain, input)
+            let (out, stats) = runChain(chain, input)
             XCTAssertLessThanOrEqual(truePeak(out, channels: 2), -1.0 + 0.01, "\(mode)")
             XCTAssertEqual(stats.reduce(0) { $0 + $1.truePeakOvers }, 0, "\(mode): gösterge de aşım görmez")
             // Akıllı kipte yönetici yüksek kayıtlı içerikte boost'u zaten geri çeker; sınırlama azdır.
-            XCTAssertGreaterThan(stats.map(\.gainReductionDB).max()!, mode == .limiterOnly ? 3 : 0.5, "\(mode): limiter çalıştı")
+            XCTAssertGreaterThan(stats.map { $0.gainReductionDB }.max()!, mode == .limiterOnly ? 3 : 0.5, "\(mode): limiter çalıştı")
         }
     }
 
@@ -100,7 +100,7 @@ final class BoostTests: XCTestCase {
             latencies.insert(chain.latency)
             var input = [Float](repeating: 0, count: 6000)
             input[100] = 0.1
-            let (out, _) = run(chain, input)
+            let (out, _) = runChain(chain, input)
             let peakIndex = out.indices.max { abs(out[$0]) < abs(out[$1]) }!
             XCTAssertEqual(peakIndex, 100 + chain.latency, "\(mode)")
             if mode != .smart {
@@ -125,7 +125,7 @@ final class BoostTests: XCTestCase {
         }
         let chain = BoostChain(sampleRate: 48000, weights: [1, 1], config: BoostConfig(percent: 150, mode: .off),
                                managerLookahead: 0.05)
-        let (out, stats) = run(chain, input)
+        let (out, stats) = runChain(chain, input)
         let counted = (0..<2).map { c in stats.reduce(0) { $0 + $1.clipped[c] } }
         XCTAssertEqual(counted, expected)
         XCTAssertGreaterThan(expected[0], 1000)
@@ -134,7 +134,7 @@ final class BoostTests: XCTestCase {
         // Ham float: kırpma yok, aynı sayılar yalnızca raporlanır.
         let raw = BoostChain(sampleRate: 48000, weights: [1, 1], config: BoostConfig(percent: 150, mode: .rawFloat),
                              managerLookahead: 0.05)
-        let (rawOut, rawStats) = run(raw, input)
+        let (rawOut, rawStats) = runChain(raw, input)
         XCTAssertEqual((0..<2).map { c in rawStats.reduce(0) { $0 + $1.clipped[c] } }, expected)
         XCTAssertGreaterThan(rawOut.map(abs).max()!, 1.3)
     }
@@ -145,7 +145,7 @@ final class BoostTests: XCTestCase {
         var random = Random(state: 9)
         func feed(_ chain: BoostChain, amplitude: Float, seconds: Double) {
             let input = (0..<Int(rate * seconds) * 2).map { _ in random.next(amplitude) }
-            _ = run(chain, input, flush: false)
+            _ = runChain(chain, input, flush: false)
         }
         let chain = BoostChain(sampleRate: rate, weights: [1, 1], config: BoostConfig(percent: 150, mode: .smart),
                                managerLookahead: 0.2)
@@ -167,7 +167,7 @@ final class BoostTests: XCTestCase {
             let chain = BoostChain(sampleRate: 48000, weights: [1],
                                    config: BoostConfig(percent: 150, mode: .limiterOnly, speakerHighPass: highPass),
                                    managerLookahead: 0.05)
-            return rootMeanSquare(run(chain, input).out[24000..<48000])
+            return rootMeanSquare(runChain(chain, input).out[24000..<48000])
         }
         XCTAssertLessThan(level(true) / level(false), 0.15, "150 Hz HPF, 50 Hz'te ≈ −19 dB")
     }
