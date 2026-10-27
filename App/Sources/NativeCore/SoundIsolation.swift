@@ -185,7 +185,8 @@ final class SoundIsolationUnit: VoiceIsolator, @unchecked Sendable {
         report.declaredLatencyMs = unit.latency * 1000
 
         // Zincirin kendi gecikmesi: yeniden örnekleme + FIFO payı + AU'nun bildirdiği.
-        let resampling = (toAU.map { $0.latency * sampleRate / auRate } ?? 0) + (fromAU?.latency ?? 0)
+        let rateAU = chosen.rate
+        let resampling = (toAU.map { $0.latency * sampleRate / rateAU } ?? 0) + (fromAU?.latency ?? 0)
         latency = Int((Double(fifoPad) + resampling + unit.latency * sampleRate).rounded())
         framesUntilProbe = Int(sampleRate * 8)
         reportValue = report
