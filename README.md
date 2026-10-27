@@ -1,16 +1,23 @@
 # KafaTakip
 
 Old 3DS'te ön kamerayla kafa takibi ve kafa konumuna göre 3D perspektif
-(head-coupled perspective).
+(head-coupled perspective). Üst ekran, arkasındaki bir kutuya açılan pencere
+gibi davranır: kafanı oynatınca kutunun içini farklı açılardan görürsün.
 
-## Aşamalar
+## Nasıl çalışıyor
 
-- [x] **Aşama 1:** Ön kamera 160x120, gri görüntü alt ekranda, FPS ölçümü
-- [x] **Aşama 2:** Yüz algılama (pico), yüzün etrafında kutu
-- [ ] **Aşama 3:** Kafa konumu (x, y, uzaklık) + One-Euro filtresi
-- [ ] **Aşama 4:** Off-axis stereo 3D sahne
-- [ ] **Aşama 5:** Gyro füzyonu, kalibrasyon
-- [ ] **Aşama 6:** 3GX plugin denemesi
+1. Ön kamera 160x120 görüntü verir, gri tonlamaya çevrilir.
+2. [pico](https://github.com/nenadmarkus/pico) yüzü bulur. Yüz bulunduktan
+   sonra sadece çevresinde aranır (hızlı); kaybolursa tüm görüntü taranır.
+3. Yüz kutusunun boyutu cetvel gibi kullanılarak kafanın ekrana göre konumu
+   cm cinsinden hesaplanır, One-Euro filtresiyle titremesi alınır.
+4. Her göz için ekran kenarlarından geçen off-axis frustum ile stereo 3D
+   sahne çizilir (citro3d).
+
+## Yapılacaklar
+
+- [ ] Gyro füzyonu (kamera kareleri arasında anında tepki)
+- [ ] 3GX plugin denemesi
 
 ## .3dsx dosyasını alma (kurulum gerektirmez)
 
@@ -19,8 +26,32 @@ Her push'ta GitHub Actions uygulamayı derliyor.
 1. GitHub'da repoda **Actions** sekmesine gir.
 2. En üstteki yeşil tikli çalıştırmaya tıkla.
 3. Sayfanın altındaki **Artifacts** bölümünden `kafatakip` dosyasını indir ve zip'i aç.
-4. `kafatakip.3dsx` dosyasını SD kartta `/3ds/` klasörüne koy.
+4. `kafatakip.3dsx` dosyasını SD kartta `/3ds/` klasörüne koy
+   (ya da ftpd ile: `curl -T kafatakip.3dsx ftp://<3DS-IP>:5000/3ds/`).
 5. 3DS'te Homebrew Launcher'dan **KafaTakip**'i aç.
+
+## Kontroller
+
+| Tuş | İşlev |
+|---|---|
+| A | Şu anki kafa konumunu merkez kabul et |
+| B | Merkezi sıfırla |
+| X / Y | Yatay / dikey hareket yönünü ters çevir |
+| D-pad yukarı/aşağı | Hareket kazancını artır/azalt |
+| L / R | Yüz algılama eşiğini azalt/artır |
+| Circle pad | Kafayı elle kaydır (takipsiz test) |
+| 3D slider | Stereo derinliği |
+| START | Çıkış |
+
+Alt ekranda takip durumu, kamera/çizim FPS'i, algılama süresi, kafa konumu
+(cm) ve yüzün kameradaki yerini gösteren bir radar var.
+
+## Ayarlanabilir varsayımlar
+
+- `source/head.c`: kamera görüş açısı (60°), yüz genişliği (15 cm), kameranın
+  ekran merkezinden yüksekliği (3 cm). Alt ekrandaki Z (uzaklık) gerçek
+  uzaklıktan farklıysa görüş açısı düzeltilir.
+- `source/scene.h`: ekran boyutu (Old 3DS 7.7 x 4.6 cm; XL için ~10.6 x 6.4).
 
 ## Mac'te kendin derlemek (isteğe bağlı)
 
@@ -33,21 +64,6 @@ Her push'ta GitHub Actions uygulamayı derliyor.
    export DEVKITARM=$DEVKITPRO/devkitARM
    ```
 4. `cd kafatakip && make`
-
-## Kontroller
-
-| Tuş | İşlev |
-|---|---|
-| START | Çıkış |
-| A | Aynalamayı aç/kapa |
-| L / R | Yüz algılama eşiğini azalt / artır |
-
-Üst ekranda kamera FPS'i, gri çevirme ve çizim süreleri (ms) ve ortalama
-parlaklık görünür. Kamerayı elinle kapatınca parlaklık 0'a yaklaşmalı.
-
-Yüz bulununca alt ekranda en güvenilir yüz kalın yeşil kutuyla, diğerleri
-ince kırmızı kutuyla çizilir. Eşik düşükse yanlış kutular çoğalır, yüksekse
-yüz kaçırılır.
 
 ## Üçüncü parti
 
