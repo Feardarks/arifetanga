@@ -6,7 +6,7 @@ Old 3DS'te ön kamerayla kafa takibi ve kafa konumuna göre 3D perspektif
 ## Aşamalar
 
 - [x] **Aşama 1:** Ön kamera 160x120, gri görüntü alt ekranda, FPS ölçümü
-- [ ] **Aşama 2:** Yüz algılama (pico), yüzün etrafında kutu
+- [x] **Aşama 2:** Yüz algılama (pico), yüzün etrafında kutu
 - [ ] **Aşama 3:** Kafa konumu (x, y, uzaklık) + One-Euro filtresi
 - [ ] **Aşama 4:** Off-axis stereo 3D sahne
 - [ ] **Aşama 5:** Gyro füzyonu, kalibrasyon
@@ -34,12 +34,23 @@ Her push'ta GitHub Actions uygulamayı derliyor.
    ```
 4. `cd kafatakip && make`
 
-## Aşama 1 kontrolleri
+## Kontroller
 
 | Tuş | İşlev |
 |---|---|
 | START | Çıkış |
 | A | Aynalamayı aç/kapa |
+| L / R | Yüz algılama eşiğini azalt / artır |
 
 Üst ekranda kamera FPS'i, gri çevirme ve çizim süreleri (ms) ve ortalama
 parlaklık görünür. Kamerayı elinle kapatınca parlaklık 0'a yaklaşmalı.
+
+Yüz bulununca alt ekranda en güvenilir yüz kalın yeşil kutuyla, diğerleri
+ince kırmızı kutuyla çizilir. Eşik düşükse yanlış kutular çoğalır, yüksekse
+yüz kaçırılır.
+
+## Üçüncü parti
+
+- [pico](https://github.com/nenadmarkus/pico) (MIT, Nenad Markuš):
+  `source/picornt.c`, `source/picornt.h` ve `data/facefinder.bin` yüz kaskadı,
+  commit `7d550c7`. Lisans: `source/picornt.LICENSE`.
