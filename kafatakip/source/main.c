@@ -134,11 +134,11 @@ int main(void)
 			lastReport = now;
 		}
 
+		// VBlank beklenmiyor: kare beklemesi zaten döngüyü kamera hızına
+		// bağlıyor, burada beklemek bir sonraki kareyi geciktirirdi.
 		gfxFlushBuffers();
-		if (gotFrame) {
+		if (gotFrame)
 			gfxSwapBuffers();
-			gspWaitForVBlank();
-		}
 	}
 
 	camera_close();

@@ -4,11 +4,19 @@
 
 #define FRAME_BYTES (CAM_W * CAM_H * 2)
 
-static u16* s_buf;
+// Çift buffer: biri işlenirken kamera diğerine yazar, böylece kare kaçmaz.
+static u16* s_bufs[2];
+static int s_recvIdx;
+static int s_readyIdx;
 static u32 s_transferUnit;
 // 0: buffer hatası olayı, 1: kare alındı olayı
 static Handle s_events[2];
 static bool s_restart;
+
+static void start_receive(void)
+{
+	CAMU_SetReceiving(&s_events[1], s_bufs[s_recvIdx], PORT_CAM1, FRAME_BYTES, (s16)s_transferUnit);
+}
 
 Result camera_open(void)
 {
@@ -16,9 +24,11 @@ Result camera_open(void)
 	if (R_FAILED(res))
 		return res;
 
-	s_buf = malloc(FRAME_BYTES);
-	if (!s_buf)
-		return -1;
+	for (int i = 0; i < 2; i++) {
+		s_bufs[i] = malloc(FRAME_BYTES);
+		if (!s_bufs[i])
+			return -1;
+	}
 
 	CAMU_SetSize(SELECT_IN1, SIZE_QQVGA, CONTEXT_A);
 	CAMU_SetOutputFormat(SELECT_IN1, OUTPUT_RGB_565, CONTEXT_A);
@@ -50,10 +60,9 @@ Result camera_open(void)
 
 bool camera_wait_frame(u64 timeout_ns)
 {
-	// Bir sonraki kareyi alma isteği. Kare işlenirken buffer'a yazılmasın diye
-	// istek ancak önceki kare işlendikten sonra (bir sonraki çağrıda) verilir.
+	// Bekleyen alma isteği yoksa (ilk çağrı ya da buffer hatası sonrası) ver.
 	if (s_events[1] == 0)
-		CAMU_SetReceiving(&s_events[1], s_buf, PORT_CAM1, FRAME_BYTES, (s16)s_transferUnit);
+		start_receive();
 
 	if (s_restart) {
 		CAMU_StartCapture(PORT_CAM1);
@@ -65,22 +74,27 @@ bool camera_wait_frame(u64 timeout_ns)
 	if (R_FAILED(res) || R_DESCRIPTION(res) == RD_TIMEOUT)
 		return false;
 
-	// İki durumda da alma isteği bitti; yeni istek bir sonraki çağrıda verilecek.
+	// İki durumda da alma isteği bitti.
 	svcCloseHandle(s_events[1]);
 	s_events[1] = 0;
 
-	if (index == 0) {
-		// Buffer hatası: yakalama durdu, yeniden başlat.
+	if (index != 1) {
+		// Buffer hatası: yakalama durdu, bir sonraki çağrıda yeniden başlat.
 		s_restart = true;
 		return false;
 	}
 
-	return index == 1;
+	// Biten kareyi hazır işaretle ve sonraki kareyi hemen öbür buffer'a iste;
+	// çağıran bu kareyi işlerken kamera beklemeden yazmaya devam eder.
+	s_readyIdx = s_recvIdx;
+	s_recvIdx ^= 1;
+	start_receive();
+	return true;
 }
 
 const u16* camera_frame(void)
 {
-	return s_buf;
+	return s_bufs[s_readyIdx];
 }
 
 void camera_close(void)
@@ -97,6 +111,8 @@ void camera_close(void)
 	CAMU_Activate(SELECT_NONE);
 	camExit();
 
-	free(s_buf);
-	s_buf = NULL;
+	for (int i = 0; i < 2; i++) {
+		free(s_bufs[i]);
+		s_bufs[i] = NULL;
+	}
 }
