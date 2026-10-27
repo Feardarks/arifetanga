@@ -10,8 +10,8 @@ options:
 
 settings:
   base:
-    MARKETING_VERSION: "0.7.0"
-    CURRENT_PROJECT_VERSION: "7"
+    MARKETING_VERSION: "0.8.0"
+    CURRENT_PROJECT_VERSION: "8"
     SWIFT_VERSION: "5.0"
     SWIFT_STRICT_CONCURRENCY: minimal
     # İmza ayarları yalnızca uygulama hedefinin okuduğu değişkenlerle verilir; release.yml bunları
@@ -36,6 +36,9 @@ targets:
       - package: NitMath
       - package: NitMath
         product: MediaFormat
+      # S4: ses DSP'si (F1 merkez çıkarma, M9 diyalog çekirdeği, yeniden örnekleme).
+      - package: NitMath
+        product: AudioDSP
       # S2: native bağımlılıklar (ThirdParty/build-all.sh; CI'da önbellekten). Statik, gömülmez.
       - framework: ThirdParty/build/FFmpeg.xcframework
         embed: false

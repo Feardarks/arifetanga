@@ -8,6 +8,9 @@ import Foundation
 /// Saat: `AVSampleBufferRenderSynchronizer` (ses varken ses donanımının saatine bağlı); Nit kareleri ve Referans
 /// katmanı aynı saati izler. Demux thread'i bloklamayan bir olay döngüsüdür: video, ses ve okuma sırayla ilerler;
 /// böylece dolu video kuyruğu sesi aç bırakmaz.
+/// M9 (S4): ham ses, renderer'a girmeden hemen önce `DialogStage`'den geçer. Ayar değişince renderer
+/// `flush(fromSourceTime:)` ile ~0,5 s ileriden kesilir ve son birkaç saniyenin ham sesinden yeniden işlenir;
+/// kesim ham örnek sınırına düştüğünden dikişsizdir. Arka planda video atılır, ses sürer (F1).
 final class NativePlayer: @unchecked Sendable {
     enum Output: Equatable {
         case nit
@@ -38,6 +41,7 @@ final class NativePlayer: @unchecked Sendable {
     private var videoRenderer: AVSampleBufferVideoRenderer?
     private let audioRenderer: AVSampleBufferAudioRenderer
     private let audio: NativeAudioPipeline?
+    private let dialog: DialogStage?
 
     private let lock = NSLock()
     private var output: Output
@@ -47,13 +51,30 @@ final class NativePlayer: @unchecked Sendable {
     private var clockStarted = false
     private var loopEnabled = true
     private var audioStatusValue: NativeAudioStatus?
+    private var dialogSettings = DialogSettings()
+    private var dialogDirty = false
+    private var backgroundRequested = false
+    private var flushResult: (generation: Int, ok: Bool)?
     private var thread: Thread?
     private let finished = DispatchSemaphore(value: 0)
 
     // Yalnızca demux thread'i.
     private var videoPending: [DemuxedPacket] = []
     private var videoPendingBytes = 0
+    /// Ham (evre öncesi) ses örnekleri.
     private var audioPending: [CMSampleBuffer] = []
+    /// Evreden çıkmış, renderer'a girmeyi bekleyen örnekler.
+    private var audioReady: [CMSampleBuffer] = []
+    /// Evreye verilmiş ham örnekler (son ~12 s): yeniden işleme bunlardan yapılır.
+    private var audioHistory: [CMSampleBuffer] = []
+    /// Renderer'a verilmiş örneklerin zaman aralıkları (yakın geçmiş): flush'ın kestiği sınırı bulmak için.
+    private var enqueuedSpans: [(pts: CMTime, end: CMTime)] = []
+    private var flushGeneration = 0
+    private var flushWaiting: (generation: Int, time: CMTime, began: CFTimeInterval)?
+    private var backgroundApplied = false
+    private var drained = false
+    /// Son sarma hedefi: bundan önceki ses yalnızca ısınmadır, çalınmaz.
+    private var audioFloor: CMTime = .zero
     private var audioEnqueuedUntil: CMTime?
     /// Bu zamandan önce başlayan ses atlanır (sarma hedefi ya da yol değişiminde zaten kuyruğa girmiş ses).
     private var audioSkipUntil: CMTime?
@@ -74,6 +95,10 @@ final class NativePlayer: @unchecked Sendable {
     /// Renderer'ın kendi tamponunun önünde hazır tutulan ses (s).
     private static let audioLead = 2.0
     private static let audioHardCap = 10.0
+    /// Yeniden işlemede kesimin oynatma başının ne kadar önünde yapılacağı ve ısınma süresi (s).
+    private static let reprocessLead = 0.5
+    private static let reprocessWarmup = 1.5
+    private static let historySeconds = 12.0
 
     init(path: String, output: Output, synchronizer: AVSampleBufferRenderSynchronizer,
          audioRenderer: AVSampleBufferAudioRenderer) throws {
@@ -96,12 +121,14 @@ final class NativePlayer: @unchecked Sendable {
         self.audioInfo = demuxer.audio
         self.audioOpenError = audioError
         self.audio = pipeline
+        self.dialog = pipeline != nil ? DialogStage() : nil
         self.audioStatusValue = pipeline?.status
         self.nitFormat = nitFormat
         self.referenceFormat = referenceFormat
         self.synchronizer = synchronizer
         self.audioRenderer = audioRenderer
         self.output = output
+        dialog?.onIsolationChange = { [weak self] in self?.markDialogDirty() }
     }
 
     /// Referans katmanının oluşturucusu ana thread'de bağlanır; katman synchronizer'a eklidir.
@@ -171,6 +198,36 @@ final class NativePlayer: @unchecked Sendable {
         return audioStatusValue
     }
 
+    /// M9 durumu (HUD, CSV); ses yoksa `nil`.
+    var dialogStatus: DialogStatus? { dialog?.status }
+
+    /// M9 ayarları. Demux thread'i, çalmakta olan sesi kesip yeniden işleyerek uygular (≈ 0,5 s içinde duyulur).
+    func setDialog(_ settings: DialogSettings) {
+        lock.lock()
+        if settings != dialogSettings {
+            dialogSettings = settings
+            dialogDirty = true
+        }
+        lock.unlock()
+    }
+
+    /// Uygulama arka plana geçti/döndü: arka planda video atılır, diyalog F1'e geçer (çapraz geçişle);
+    /// dönüşte video o anki zamandan yeniden doldurulur, ses kesilmez.
+    func setBackground(_ value: Bool) {
+        lock.lock()
+        let changed = value != backgroundRequested
+        backgroundRequested = value
+        if changed, !value { pendingSeek = (mediaTime, true) }
+        lock.unlock()
+        if changed, !value { frames.cancel() }
+    }
+
+    private func markDialogDirty() {
+        lock.lock()
+        dialogDirty = true
+        lock.unlock()
+    }
+
     var mediaTime: Double {
         let t = CMTimebaseGetTime(timebase).seconds
         return t.isFinite ? t : 0
@@ -228,6 +285,10 @@ final class NativePlayer: @unchecked Sendable {
             let renderer = videoRenderer
             let referenceFormat = self.referenceFormat
             let playing = self.playing
+            let background = backgroundRequested
+            let dialogChanged = dialogDirty
+            let flushDone = flushResult
+            flushResult = nil
             lock.unlock()
 
             if let seek {
@@ -236,30 +297,55 @@ final class NativePlayer: @unchecked Sendable {
             }
 
             var worked = false
-            if let packet = videoPending.first,
-               feedVideo(packet, output: out, renderer: renderer, referenceFormat: referenceFormat) {
+            if let dialog {
+                if background != backgroundApplied {
+                    backgroundApplied = background
+                    dialog.setBackground(background)
+                }
+                if let done = flushDone, let waiting = flushWaiting, done.generation == waiting.generation {
+                    finishReprocess(ok: done.ok, waiting: waiting)
+                    worked = true
+                } else if dialogChanged, flushWaiting == nil {
+                    beginReprocess()
+                }
+            }
+            if background {
+                // Ekran yokken kareler tüketilmez; video beklerse ses aç kalırdı.
+                videoPending.removeAll()
+                videoPendingBytes = 0
+            } else if let packet = videoPending.first,
+                      feedVideo(packet, output: out, renderer: renderer, referenceFormat: referenceFormat) {
                 videoPending.removeFirst()
                 videoPendingBytes -= packet.data.count
                 worked = true
             }
-            if !audioPending.isEmpty, audioRenderer.isReadyForMoreMediaData {
-                let sample = audioPending.removeFirst()
-                audioRenderer.enqueue(sample)
-                audioEnqueuedUntil = Self.end(of: sample)
-                checkAudioRenderer()
-                worked = true
+            if flushWaiting == nil, audioRenderer.isReadyForMoreMediaData {
+                if audioReady.isEmpty, !audioPending.isEmpty {
+                    let raw = audioPending.removeFirst()
+                    remember(raw)
+                    audioReady += dialog?.process(raw) ?? [raw]
+                    worked = true
+                }
+                if !audioReady.isEmpty {
+                    enqueueAudio(audioReady.removeFirst())
+                    worked = true
+                }
             }
             if wantsInput() {
                 if let packet = demuxer.readPacket() {
-                    route(packet)
+                    route(packet, background: background)
                 } else {
                     endOfFile = true
                 }
                 worked = true
             }
-            startClockIfReady(output: out, playing: playing)
+            if endOfFile, audioPending.isEmpty, audioReady.isEmpty, !drained, let dialog {
+                drained = true
+                audioReady += dialog.drain()
+            }
+            startClockIfReady(output: out, playing: playing, background: background)
 
-            if endOfFile, videoPending.isEmpty, audioPending.isEmpty, loop, mediaTime >= endTime - 0.05 {
+            if endOfFile, videoPending.isEmpty, audioPending.isEmpty, audioReady.isEmpty, loop, mediaTime >= endTime - 0.05 {
                 performSeek(to: 0, keepAudio: false, renderer: renderer)
                 DispatchQueue.main.async { [weak self] in self?.onLoop?() }
                 continue
@@ -284,13 +370,14 @@ final class NativePlayer: @unchecked Sendable {
         return span.isFinite ? span : 0
     }
 
-    private func route(_ packet: DemuxedPacket) {
+    private func route(_ packet: DemuxedPacket, background: Bool) {
         switch packet.kind {
         case .video:
             if packet.pts.isValid {
                 let end = packet.pts.seconds + (packet.duration.isValid ? packet.duration.seconds : 0)
                 endTime = max(endTime, end)
             }
+            guard !background else { return }
             videoPending.append(packet)
             videoPendingBytes += packet.data.count
         case .audio:
@@ -358,14 +445,20 @@ final class NativePlayer: @unchecked Sendable {
     }
 
     /// Saat ilk kare ve en az 0,2 s ses hazır olunca başlar (preroll). Ses gelmezse 1,5 s sonra sessiz başlar.
-    private func startClockIfReady(output: Output, playing: Bool) {
+    /// Arka planda (ör. döngü başa sarınca) kare beklenmez.
+    private func startClockIfReady(output: Output, playing: Bool, background: Bool) {
         lock.lock()
         let started = clockStarted
         lock.unlock()
         guard !started else { return }
-        let videoStart: Double? = switch output {
-        case .nit: frames.firstPTS
-        case .reference: referenceEnqueued ? firstReferencePTS : nil
+        let videoStart: Double?
+        if background {
+            videoStart = clockStart ?? audioEnqueuedUntil?.seconds
+        } else {
+            switch output {
+            case .nit: videoStart = frames.firstPTS
+            case .reference: videoStart = referenceEnqueued ? firstReferencePTS : nil
+            }
         }
         guard let first = videoStart else { return }
         let start = clockStart ?? first
@@ -395,13 +488,33 @@ final class NativePlayer: @unchecked Sendable {
         firstReferencePTS = nil
         audio?.flush()
         if keepAudio {
-            audioSkipUntil = audioPending.last.map { Self.end(of: $0) } ?? audioEnqueuedUntil
+            // Evreye verilmiş son ham örnekten devam edilir; evre sıfırlanmaz (ses kesilmez).
+            audioSkipUntil = audioPending.last.map { Self.end(of: $0) } ?? audioHistory.last.map { Self.end(of: $0) }
+                ?? audioEnqueuedUntil
         } else {
             audioRenderer.flush()
             audioPending.removeAll()
+            audioReady.removeAll()
+            audioHistory.removeAll()
+            enqueuedSpans.removeAll()
             audioEnqueuedUntil = nil
+            drained = false
             let time = CMTime(seconds: target, preferredTimescale: 90_000)
-            audioSkipUntil = time
+            audioFloor = time
+            if let dialog {
+                // Hedef öncesi ses (anahtar kareden hedefe) ısınma olarak işlenir, çıktısı atılır (§5.4).
+                flushGeneration += 1
+                flushWaiting = nil
+                lock.lock()
+                let settings = dialogSettings
+                dialogDirty = false
+                lock.unlock()
+                dialog.apply(settings)
+                dialog.reset(startAt: time, settleSeconds: Self.reprocessWarmup, forgetMusic: true)
+                audioSkipUntil = nil
+            } else {
+                audioSkipUntil = time
+            }
             clockStart = target
             clockWaitBegan = CACurrentMediaTime()
             lock.lock()
@@ -410,6 +523,84 @@ final class NativePlayer: @unchecked Sendable {
             synchronizer.setRate(0, time: time)
         }
         frames.resume()
+    }
+
+    // MARK: Ses çıkışı ve M9 yeniden işleme
+
+    private func enqueueAudio(_ sample: CMSampleBuffer) {
+        audioRenderer.enqueue(sample)
+        let end = Self.end(of: sample)
+        audioEnqueuedUntil = end
+        enqueuedSpans.append((CMSampleBufferGetPresentationTimeStamp(sample), end))
+        if enqueuedSpans.count > 512 {
+            let horizon = CMTime(seconds: mediaTime - 2, preferredTimescale: 90_000)
+            enqueuedSpans.removeAll { $0.end < horizon }
+        }
+        checkAudioRenderer()
+    }
+
+    private func remember(_ raw: CMSampleBuffer) {
+        audioHistory.append(raw)
+        let horizon = Self.end(of: raw) - CMTime(seconds: Self.historySeconds, preferredTimescale: 90_000)
+        while let first = audioHistory.first, Self.end(of: first) < horizon { audioHistory.removeFirst() }
+    }
+
+    /// Ayar değişti: renderer'daki işlenmiş ses oynatma başının `reprocessLead` önünden kesilir; sonuç gelince
+    /// (`finishReprocess`) o sınırdan itibaren geçmiş yeniden işlenir. Beklerken renderer'a ses verilmez.
+    private func beginReprocess() {
+        guard audioEnqueuedUntil != nil else {
+            // Henüz renderer'a ses girmedi: hazır bekleyen ses doğrudan yeniden üretilir.
+            let first = audioHistory.first.map { CMSampleBufferGetPresentationTimeStamp($0) } ?? .zero
+            regenerate(from: CMTimeMaximum(first, audioFloor))
+            return
+        }
+        lock.lock()
+        let started = clockStarted
+        lock.unlock()
+        let now = started ? mediaTime : (clockStart ?? 0)
+        let time = CMTime(seconds: now + Self.reprocessLead, preferredTimescale: 90_000)
+        flushGeneration += 1
+        let generation = flushGeneration
+        flushWaiting = (generation, time, CACurrentMediaTime())
+        audioRenderer.flush(fromSourceTime: time) { [weak self] ok in self?.flushFinished(generation: generation, ok: ok) }
+    }
+
+    private func flushFinished(generation: Int, ok: Bool) {
+        lock.lock()
+        flushResult = (generation, ok)
+        lock.unlock()
+    }
+
+    private func finishReprocess(ok: Bool, waiting: (generation: Int, time: CMTime, began: CFTimeInterval)) {
+        flushWaiting = nil
+        // Renderer, PTS'i kesim zamanından küçük örnekleri tutar: devam noktası ilk atılan örneğin başıdır (ham
+        // örnek sınırı). Flush yapılamadıysa (zaman geçmiş) renderer'daki her şey çalar; devam onun sonundan.
+        var resumeAt = audioEnqueuedUntil ?? waiting.time
+        if ok, let first = enqueuedSpans.first(where: { $0.pts >= waiting.time }) { resumeAt = first.pts }
+        enqueuedSpans.removeAll { $0.pts >= resumeAt }
+        if ok, let end = audioEnqueuedUntil, resumeAt < end { audioEnqueuedUntil = resumeAt }
+        regenerate(from: resumeAt)
+        dialog?.noteReprocess(milliseconds: (CACurrentMediaTime() - waiting.began) * 1000)
+    }
+
+    /// Son ayarlarla, `resumeAt`'ten itibaren çalınacak sesi geçmişten yeniden üretir (öncesi ısınma).
+    private func regenerate(from resumeAt: CMTime) {
+        guard let dialog else { return }
+        lock.lock()
+        let settings = dialogSettings
+        dialogDirty = false
+        lock.unlock()
+        dialog.apply(settings)
+        let warmStart = resumeAt - CMTime(seconds: Self.reprocessWarmup, preferredTimescale: 90_000)
+        let firstUsed = audioHistory.firstIndex { Self.end(of: $0) > warmStart } ?? audioHistory.count
+        let settle = audioHistory.indices.contains(firstUsed)
+            ? max((resumeAt - CMSampleBufferGetPresentationTimeStamp(audioHistory[firstUsed])).seconds, 0) : 0
+        dialog.reset(startAt: resumeAt, settleSeconds: settle, forgetMusic: false)
+        audioReady.removeAll()
+        drained = false
+        for raw in audioHistory[firstUsed...] {
+            audioReady += dialog.process(raw, warm: true)
+        }
     }
 
     private func checkAudioRenderer() {

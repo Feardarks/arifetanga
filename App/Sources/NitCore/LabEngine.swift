@@ -91,6 +91,9 @@ final class LabEngine: NSObject {
     private let synchronizer = AVSampleBufferRenderSynchronizer()
     private let audioRenderer = AVSampleBufferAudioRenderer()
     private var loggedAudioLabel: String?
+    private var loggedDialogEngine: String?
+    private var loggedIsolationReport = false
+    private var lifecycleObservers: [NSObjectProtocol] = []
     /// DV P5'in şekillendirme verisi okunamazsa Nit yerine Referans gösterilir (yanlış renk yerine).
     private var nativeForcedReference = false
     private static let nativeExtensions: Set<String> = ["mkv", "webm", "m2ts", "mts", "ts"]
@@ -133,6 +136,23 @@ final class LabEngine: NSObject {
         filter = HeadroomFilter(tauUp: params.tauUpMs / 1000, deadband: params.deadbandPercent / 100)
         peakLock = PeakLock(config: params.peakLockConfig, enabled: params.peakLock)
         telemetry.setParams(params.csvSummary)
+        // M9 (S4, AS-15): arka planda video atılır, diyalog F1'e geçer; dönüşte geri gelir.
+        let center = NotificationCenter.default
+        lifecycleObservers = [
+            center.addObserver(forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.backgroundChanged(true) }
+            },
+            center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.backgroundChanged(false) }
+            },
+        ]
+    }
+
+    private func backgroundChanged(_ background: Bool) {
+        native?.setBackground(background)
+        guard native != nil else { return }
+        event(background ? "Arka plan: video duruyor, ses sürüyor" + (params.dialogSettings.active ? " · diyalog → F1" : "")
+                         : "Ön plan: video yeniden dolduruluyor")
     }
 
     // MARK: Yaşam döngüsü
@@ -402,6 +422,10 @@ final class LabEngine: NSObject {
             native?.setOutput(effectiveMode == .nit ? .nit : .reference)
         }
         telemetry.setParams(params.csvSummary)
+        if params.dialogSettings != old.dialogSettings {
+            native?.setDialog(params.dialogSettings)
+            event("Diyalog: \(params.dialogSettings.label)" + (native == nil && params.dialogSettings.active ? " (yalnızca kendi hattımızda)" : ""))
+        }
         needsRender = true
         // Kaydırıcı sürüklenirken CSV'yi boğmamak için parametre olayları en fazla 2 Hz yazılır.
         let now = CACurrentMediaTime()
@@ -616,6 +640,7 @@ final class LabEngine: NSObject {
             snapshot.playing = isPlayingNow
             snapshot.recordingSeconds = telemetry.elapsed
             fillAudioSnapshot()
+            fillDialogSnapshot()
             fillSceneWhiteSnapshot()
             fillRpuSnapshot()
             onSnapshot?(snapshot)
@@ -691,6 +716,10 @@ final class LabEngine: NSObject {
         player.onLoop = { [weak self] in MainActor.assumeIsolated { self?.nativeLooped() } }
         player.onError = { [weak self] message in MainActor.assumeIsolated { self?.fail(message) } }
         player.setOutput(effectiveMode == .nit ? .nit : .reference)
+        player.setDialog(params.dialogSettings)
+        player.setBackground(UIApplication.shared.applicationState == .background)
+        loggedDialogEngine = nil
+        loggedIsolationReport = false
         surface.apply(.single(effectiveMode))
         updatePeakLockEnabled()
 
@@ -735,6 +764,71 @@ final class LabEngine: NSObject {
         if key != loggedAudioLabel {
             loggedAudioLabel = key
             event(status.label)
+        }
+    }
+
+    /// M9 satırları (HUD) ve tek seferlik olaylar: motor değişimi, AS-12 raporu.
+    private func fillDialogSnapshot() {
+        guard let native, let status = native.dialogStatus else {
+            snapshot.dialog = nil
+            snapshot.dialogLines = params.dialogSettings.active ? ["Diyalog: yalnızca kendi hattımızda (MKV/M2TS ya da MP4 için kendi hattımız)"] : []
+            return
+        }
+        snapshot.dialog = status
+        guard status.settings.active else {
+            snapshot.dialogLines = []
+            return
+        }
+        var lines: [String] = []
+        var head = "Diyalog \(status.settings.label) → \(status.engine)"
+        if let note = status.engineNote { head += " (\(note))" }
+        lines.append(head)
+        var mix = "gecikme \(TR.num(status.latencyMs, 0)) ms · r \(TR.num(status.relaxation)) · c \(TR.num(status.compensationDB, 1)) dB"
+        if let cpu = status.stageCPUPercent { mix += " · evre %\(TR.num(cpu, 1))" }
+        if let ms = status.lastReprocessMs { mix += " · yeniden işleme \(TR.num(ms, 0)) ms" }
+        lines.append(mix)
+        if let layout = status.decodedLayout, let path = native.audioStatus?.path, path != .pcm {
+            lines.append("\(path == .atmos ? "Atmos" : "Dolby") → \(layout) yatak (diyalog için)")
+        }
+        if let error = status.decodeError { lines.append("Dolby çözülemedi, ses değişmeden geçiyor: \(error)") }
+        if let au = status.isolation {
+            lines.append("AU \(au.format)")
+            var latency = "AU gecikme: bildirilen \(TR.num(au.declaredLatencyMs, 1)) · kullanılan \(TR.num(au.usedLatencyMs, 1)) ms"
+            if let measured = au.measuredLatencyMs, let rho = au.measuredCorrelation {
+                latency += " · ölçülen \(TR.num(measured, 1)) (ρ \(TR.num(Double(rho))))"
+            }
+            lines.append(latency)
+            if let cpu = au.cpuPercent, let wall = au.wallPercent {
+                var load = "AU yük: CPU %\(TR.num(cpu, 1)) · duvar %\(TR.num(wall, 1)) → \(au.computeHint)"
+                if let worst = au.worstBlockMs { load += " · blok ≤ \(TR.num(worst, 2)) ms" }
+                if au.renderErrors > 0 { load += " · hata \(au.renderErrors)" }
+                lines.append(load)
+            }
+            if !loggedIsolationReport {
+                loggedIsolationReport = true
+                var text = "AS-12: AUSoundIsolation \(au.format) · kabul: \(au.accepted) · bildirilen gecikme \(TR.num(au.declaredLatencyMs, 1)) ms"
+                if let calibrated = au.calibratedLatencyMs, let rho = au.calibrationCorrelation {
+                    text += " · kalibrasyon \(TR.num(calibrated, 1)) ms (ρ \(TR.num(Double(rho))))"
+                }
+                text += " · kullanılan \(TR.num(au.usedLatencyMs, 1)) ms"
+                if let error = au.lastError { text += " · not: \(error)" }
+                event(text)
+            }
+        } else if let state = status.isolationState {
+            lines.append("AU: \(state)")
+        }
+        if let music = status.music {
+            var text = "SA: müzik \(TR.num(music.music)) · şarkı \(TR.num(music.singing)) · konuşma \(TR.num(music.speech))"
+            if let ms = status.musicMsPerDecision { text += " · \(TR.num(ms, 1)) ms/karar" }
+            lines.append(text)
+        } else if let error = status.musicError {
+            lines.append("SA: \(error)")
+        }
+        snapshot.dialogLines = lines
+        let engineKey = status.engine + (status.engineNote ?? "")
+        if engineKey != loggedDialogEngine {
+            loggedDialogEngine = engineKey
+            event("Diyalog motoru: \(status.engine)" + (status.engineNote.map { " (\($0))" } ?? ""))
         }
     }
 
@@ -946,6 +1040,7 @@ final class LabEngine: NSObject {
             jitterMs: snapshot.vsyncJitterMs, outputMax: snapshot.outputMax, playing: snapshot.playing,
             referenceWhite: snapshot.referenceWhite, frameWhite: snapshot.frameWhite, sceneWhite: snapshot.sceneWhite,
             anchor: snapshot.anchor, histogramWhite: snapshot.histogramWhite, rpuMicros: snapshot.rpuMeanMicros,
-            audioCPU: snapshot.audioCPUPercent, chromeVisible: chromeVisible, panel: panelName, event: event)
+            audioCPU: snapshot.audioCPUPercent, dialog: snapshot.dialog, chromeVisible: chromeVisible, panel: panelName,
+            event: event)
     }
 }

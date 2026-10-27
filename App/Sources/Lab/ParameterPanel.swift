@@ -62,6 +62,29 @@ struct ParameterPanel: View {
                 Text("Kaliteli: büyütmede bicubic, 4K'yı küçültürken 2×2 süper örnekleme.")
                     .font(.caption).foregroundStyle(DS.secondary)
 
+                group("Diyalog (M9)")
+                Picker("Kademe", selection: $model.params.dialogTier) {
+                    Text("Kapalı").tag(0)
+                    Text("+3 dB").tag(1)
+                    Text("+6 dB").tag(2)
+                    Text("+9 dB").tag(3)
+                }
+                .pickerStyle(.segmented)
+                Picker("Motor", selection: $model.params.dialogEngine) {
+                    ForEach(DialogSettings.Engine.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                Picker("AU modeli", selection: $model.params.dialogHighQuality) {
+                    Text("Voice").tag(false)
+                    Text("HighQualityVoice").tag(true)
+                }
+                .pickerStyle(.segmented)
+                Toggle("Solo: yalnızca ayrılmış ses", isOn: $model.params.dialogSolo)
+                    .font(.subheadline)
+                    .tint(DS.green)
+                Text("Otomatik: ön planda AUSoundIsolation, arka planda F1. AU: arka planda da AU (AS-15). Solo kör test içindir; loudness eşleme uygulanmaz.")
+                    .font(.caption).foregroundStyle(DS.secondary)
+
                 group("SDR gaması")
                 Picker("Gama", selection: $model.params.sdrGamma) {
                     Text("2,2").tag(2.2)

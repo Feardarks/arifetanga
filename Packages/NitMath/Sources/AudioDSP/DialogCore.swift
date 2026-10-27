@@ -68,6 +68,9 @@ public final class DialogCore {
     private let crossfadeFrames: Int
     private let warmFrames: Int
     private var neededVoice = true
+    /// Sıfırlamadan sonra hızlı oturma süresi (kare): yeniden işlemede ısınma çıktısı atılır, `c` ve `r` hemen
+    /// yerine otursun diye bu sürede zaman sabitleri kısadır.
+    private var settleFrames = 0
 
     public init(sampleRate: Double, roles: [ChannelRole], primary: VoiceIsolator?, fallback: VoiceIsolator?,
                 start: Engine = .primary) {
@@ -143,8 +146,10 @@ public final class DialogCore {
         }
 
         // Kazançlar.
+        let settling = settleFrames > 0
+        settleFrames = max(settleFrames - n, 0)
         relaxation = Self.smooth(relaxation, toward: relaxationTarget, dt: blockSeconds,
-                                 tau: relaxationTarget < relaxation ? 0.5 : 1.0)
+                                 tau: settling ? 0.1 : relaxationTarget < relaxation ? 0.5 : 1.0)
         let g = pow(10, Self.gainDB(tier: tier) / 20)
         let a = Float((g - 1) * relaxation)
 
@@ -180,7 +185,7 @@ public final class DialogCore {
             target = min(max(ld - lw, -6), 0)
         }
         let start = compensationDB
-        compensationDB = Self.smooth(compensationDB, toward: target, dt: blockSeconds, tau: 2.0)
+        compensationDB = Self.smooth(compensationDB, toward: target, dt: blockSeconds, tau: settling ? 0.15 : 2.0)
         // Blok içinde doğrusal rampa (fermuar sesi olmasın).
         let g0 = Float(pow(10, start / 20))
         let g1 = Float(pow(10, compensationDB / 20))
@@ -192,12 +197,14 @@ public final class DialogCore {
     }
 
     /// Durumu sıfırlar (sarma ya da yeniden işleme); bir sonraki çıktı yine `latency` gecikmelidir.
-    public func reset() {
+    /// - Parameter settleSeconds: Isınma süresi; bu sürede `c` ve `r` hızlı oturur (çıktısı atılacak bölüm).
+    public func reset(settleSeconds: Double = 0) {
         dryFIFO = [Float](repeating: 0, count: latency * channels)
         dryMeter.reset()
         wetMeter.reset()
         compensationDB = 0
         relaxation = relaxationTarget
+        settleFrames = Int(settleSeconds * sampleRate)
         for e in 0..<2 where engineRunning[e] { startEngine(e) }
     }
 

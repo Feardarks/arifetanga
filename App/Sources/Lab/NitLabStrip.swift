@@ -52,6 +52,11 @@ struct NitLabStrip: View {
                            disabled: model.params.mode == .reference) { model.params.peakLock.toggle() }
                 PillButton(title: "Titreşim", isOn: model.params.dither,
                            disabled: model.params.mode == .reference) { model.params.dither.toggle() }
+                // M9: her dokunuş bir kademe (kapalı → +3 → +6 → +9 dB → kapalı).
+                PillButton(title: model.params.dialogTier == 0 ? "Diyalog" : "Diyalog +\(model.params.dialogTier * 3) dB",
+                           isOn: model.params.dialogTier > 0) {
+                    model.params.dialogTier = (model.params.dialogTier + 1) % 4
+                }
             }
             // Satır 3: araçlar (dar ekranda yatay kayar)
             HStack(spacing: 8) {

@@ -238,11 +238,16 @@ final class NativeAudioPipeline {
         mediaSeconds += Double(count) / Double(rate)
         if mediaSeconds > 0 { status.decodeCPUPercent = cpuSeconds / mediaSeconds * 100 }
 
+        return Self.pcmSampleBuffer(samples, frames: count, format: format, pts: pts)
+    }
+
+    /// float32 karışık PCM örneği (M9 evresi de kullanır).
+    static func pcmSampleBuffer(_ samples: [Float], frames: Int, format: CMAudioFormatDescription, pts: CMTime) -> CMSampleBuffer? {
         let data = samples.withUnsafeBytes { Data($0) }
-        guard let block = Self.blockBuffer(data) else { return nil }
+        guard let block = blockBuffer(data) else { return nil }
         var sample: CMSampleBuffer?
         let result = CMAudioSampleBufferCreateReadyWithPacketDescriptions(
-            allocator: kCFAllocatorDefault, dataBuffer: block, formatDescription: format, sampleCount: count,
+            allocator: kCFAllocatorDefault, dataBuffer: block, formatDescription: format, sampleCount: frames,
             presentationTimeStamp: pts, packetDescriptions: nil, sampleBufferOut: &sample)
         return result == noErr ? sample : nil
     }
@@ -261,7 +266,7 @@ final class NativeAudioPipeline {
     }
 
     /// float32 karışık PCM; kanal düzeni açık kanal tanımlarıyla.
-    private static func pcmFormat(rate: Int, positions: [SpeakerPosition]) -> CMAudioFormatDescription? {
+    static func pcmFormat(rate: Int, positions: [SpeakerPosition]) -> CMAudioFormatDescription? {
         let channels = positions.count
         var asbd = AudioStreamBasicDescription(
             mSampleRate: Float64(rate), mFormatID: kAudioFormatLinearPCM,

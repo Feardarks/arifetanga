@@ -240,6 +240,17 @@ final class DialogCoreTests: XCTestCase {
         XCTAssertEqual(core.activeEngine, .fallback, "ısınma 0,3 s + çapraz geçiş 0,2 s içinde")
     }
 
+    /// Yeniden işlemede ısınma: `c` 1 s içinde yerine oturur (τ = 2 s ile yalnızca −2,4 dB'ye varırdı).
+    func testResetWithSettleConvergesQuickly() {
+        let core = DialogCore(sampleRate: rate, roles: [.left, .right], primary: DelayIsolator(latency: 0), fallback: nil)
+        core.tier = 2
+        _ = run(core, stereoNoise(seconds: 3), channels: 2)
+        core.reset(settleSeconds: 1)
+        XCTAssertEqual(core.compensationDB, 0)
+        _ = run(core, stereoNoise(seconds: 1, seed: 11), channels: 2)
+        XCTAssertEqual(core.compensationDB, -6, accuracy: 0.5)
+    }
+
     func testMusicRelaxationTargetsAndSmoothing() {
         XCTAssertEqual(MusicRelaxation.target(music: 1, singing: 0, speech: 0), 0.2, accuracy: 1e-9)
         XCTAssertEqual(MusicRelaxation.target(music: 0, singing: 0, speech: 0), 1, accuracy: 1e-9)
@@ -251,5 +262,53 @@ final class DialogCoreTests: XCTestCase {
         _ = run(core, stereoNoise(seconds: 0.5), channels: 2)
         XCTAssertLessThan(core.relaxation, 0.55, "gevşeme τ = 0,5 s")
         XCTAssertGreaterThan(core.relaxation, 0.2)
+    }
+}
+
+final class ResamplerTests: XCTestCase {
+    private func roundTrip(rate: Int, via middle: Int, input: [Float]) -> (out: [Float], latency: Double) {
+        let down = Resampler(inputRate: rate, outputRate: middle)
+        let up = Resampler(inputRate: middle, outputRate: rate)
+        var out: [Float] = []
+        var offset = 0
+        let chunks = [1, 40, 512, 1536, 700, 4096]
+        var i = 0
+        while offset < input.count {
+            let n = min(chunks[i % chunks.count], input.count - offset)
+            let low = Array(input[offset..<(offset + n)]).withUnsafeBufferPointer { down.process($0) }
+            out += low.withUnsafeBufferPointer { up.process($0) }
+            // Çıkış girdinin gerisinde en çok birkaç örnek kalır (sarmalayıcının FIFO payı buna göre).
+            XCTAssertLessThanOrEqual(offset + n - out.count, 8)
+            offset += n
+            i += 1
+        }
+        return (out, down.latency * Double(rate) / Double(middle) + up.latency)
+    }
+
+    private func sine(_ hz: Double, rate: Int, count: Int, delay: Double = 0) -> [Float] {
+        (0..<count).map { Float(0.5 * sin(2 * Double.pi * hz * (Double($0) - delay) / Double(rate))) }
+    }
+
+    func test48kVia16kRoundTripHasIntegerLatency() {
+        let input = sine(1000, rate: 48000, count: 24000)
+        let (out, latency) = roundTrip(rate: 48000, via: 16000, input: input)
+        XCTAssertEqual(latency, 143, accuracy: 1e-9, "48k ↔ 16k: gecikme tam sayı, kuru yol birebir hizalanır")
+        let ideal = sine(1000, rate: 48000, count: out.count, delay: latency)
+        XCTAssertLessThan(rms(zip(out, ideal).map { $0 - $1 }[4000...]), 1e-3)
+    }
+
+    func test44kVia16kRoundTripMatchesFractionalLatency() {
+        let input = sine(1000, rate: 44100, count: 22050)
+        let (out, latency) = roundTrip(rate: 44100, via: 16000, input: input)
+        let ideal = sine(1000, rate: 44100, count: out.count, delay: latency)
+        XCTAssertLessThan(rms(zip(out, ideal).map { $0 - $1 }[4000...]), 1e-3)
+    }
+
+    func testDecimationRejectsAboveNewNyquist() {
+        let down = Resampler(inputRate: 48000, outputRate: 16000)
+        let input = sine(12000, rate: 48000, count: 24000)
+        let out = input.withUnsafeBufferPointer { down.process($0) }
+        XCTAssertEqual(out.count, 8000)
+        XCTAssertLessThan(rms(out[2000...]), 1e-3, "8 kHz üstü katlanmaz")
     }
 }

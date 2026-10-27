@@ -96,6 +96,15 @@ struct NitParams: Equatable {
     var highQualityScaler = true
     /// MP4/MOV'u da kendi hattımızla aç (MKV/M2TS her zaman kendi hattımızdadır). Referans: AVSampleBufferDisplayLayer.
     var preferNativeEngine = false
+    /// M9 diyalog netleştirme (S4): kademe 0–3 (+3/+6/+9 dB), motor, solo (kör test) ve AU modeli.
+    var dialogTier = 0
+    var dialogEngine: DialogSettings.Engine = .automatic
+    var dialogSolo = false
+    var dialogHighQuality = false
+
+    var dialogSettings: DialogSettings {
+        DialogSettings(tier: dialogTier, engine: dialogEngine, solo: dialogSolo, highQuality: dialogHighQuality)
+    }
 
     var curve: NitCurve {
         curveMode == .maximum ? NitCurve(w: maxW, kappa: maxKappa) : NitCurve(w: balancedW, kappa: balancedKappa)
@@ -122,7 +131,7 @@ struct NitParams: Equatable {
             + "aralik_ms=\(peakIntervalMs); esik=\(peakThreshold); titresim=\(dither); b=\(ditherBits); "
             + "sdr_gama=\(sdrGamma); L_ref_kip=\(referenceWhiteMode.rawValue); L_ref_elle=\(referenceWhiteNits); "
             + "sapma_stop=\(sceneDeviationStops); kesim_esigi=\(cutThreshold); olcekleyici=\(highQualityScaler ? "kaliteli" : "bilineer"); "
-            + "motor=\(preferNativeEngine ? "kendi hattimiz" : "AVPlayer (MP4/MOV)")"
+            + "motor=\(preferNativeEngine ? "kendi hattimiz" : "AVPlayer (MP4/MOV)"); \(dialogSettings.csv)"
     }
 }
 
@@ -175,6 +184,9 @@ struct LabSnapshot {
     /// Ses hattı (S3): codec, düzen, yol (Atmos sıkıştırılmış / PCM) ve FFmpeg çözme yükü (AS-10).
     var audioSummary: String?
     var audioCPUPercent: Double?
+    /// M9 (S4): HUD satırları ve CSV için son durum.
+    var dialogLines: [String] = []
+    var dialog: DialogStatus?
 
     /// P-2: çıkış hiçbir zaman sistemin o an verdiği headroom'u aşmaz.
     var p2OK: Bool { outputMax <= hCur + 1e-6 }

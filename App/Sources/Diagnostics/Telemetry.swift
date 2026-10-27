@@ -32,6 +32,8 @@ final class Telemetry {
         var histogramWhite: Double?
         var rpuMicros: Double?
         var audioCPU: Double?
+        /// M9 (S4): etkin motor, r, c, evre yükü, AU yükü ve gecikmeleri, Sound Analysis olasılıkları.
+        var dialog: DialogStatus?
         var chromeVisible: Bool
         var panel: String
         var event: String
@@ -60,7 +62,9 @@ final class Telemetry {
         var out = "# Arifetanga Nit Laboratuvarı · S2\n"
         out += "# parametreler: \(paramsHeader)\n"
         out += "t_s,zaman,H_cur,H_pot,H_s,H_eff,parlaklik,durum,mod,kaynak,isi,dusuk_guc,ekran_kaydi,"
-        out += "gpu_p50_ms,gpu_p95_ms,dusen_kare,kadans,sapma_ms,cikis_maks,oynatiyor,L_ref,W_f,W_hat,A,W_hist,rpu_us,ses_cpu_yuzde,chromeVisible,panel,olay\n"
+        out += "gpu_p50_ms,gpu_p95_ms,dusen_kare,kadans,sapma_ms,cikis_maks,oynatiyor,L_ref,W_f,W_hat,A,W_hist,rpu_us,ses_cpu_yuzde,"
+        out += "diyalog,diyalog_motor,diyalog_r,diyalog_c_db,diyalog_evre_cpu_yuzde,au_cpu_yuzde,au_duvar_yuzde,au_blok_maks_ms,"
+        out += "au_gecikme_ms,au_olculen_ms,sa_muzik,sa_sarki,sa_konusma,chromeVisible,panel,olay\n"
         func f(_ v: Double, _ d: Int = 4) -> String { String(format: "%.\(d)f", v) }
         func q(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
         func o(_ v: Double?) -> String { v.map { f($0, 1) } ?? "" }
@@ -69,8 +73,10 @@ final class Telemetry {
                     q(r.status), r.mode, q(r.source), r.thermal, r.lowPower ? "1" : "0", r.captured ? "1" : "0",
                     f(r.gpuP50, 3), f(r.gpuP95, 3), String(r.dropped), q(r.cadence), f(r.jitterMs, 2), f(r.outputMax),
                     r.playing ? "1" : "0", f(r.referenceWhite, 1), o(r.frameWhite), o(r.sceneWhite), o(r.anchor),
-                    o(r.histogramWhite), o(r.rpuMicros), r.audioCPU.map { f($0, 2) } ?? "", r.chromeVisible ? "1" : "0",
-                    r.panel, q(r.event)].joined(separator: ",")
+                    o(r.histogramWhite), o(r.rpuMicros), r.audioCPU.map { f($0, 2) } ?? ""]
+                .joined(separator: ",")
+            out += "," + Self.dialogColumns(r.dialog, f).joined(separator: ",")
+            out += "," + [r.chromeVisible ? "1" : "0", r.panel, q(r.event)].joined(separator: ",")
             out += "\n"
         }
         let stamp = DateFormatter()
@@ -78,5 +84,14 @@ final class Telemetry {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("nit-lab-\(stamp.string(from: Date())).csv")
         try out.write(to: url, atomically: true, encoding: .utf8)
         return url
+    }
+
+    private static func dialogColumns(_ d: DialogStatus?, _ f: (Double, Int) -> String) -> [String] {
+        guard let d, d.settings.active else { return ["0", "", "", "", "", "", "", "", "", "", "", "", ""] }
+        func o(_ v: Double?, _ digits: Int = 2) -> String { v.map { f($0, digits) } ?? "" }
+        let au = d.isolation
+        return [d.settings.solo ? "solo" : String(d.settings.tier), "\"\(d.engine)\"", f(d.relaxation, 3), f(d.compensationDB, 2),
+                o(d.stageCPUPercent), o(au?.cpuPercent), o(au?.wallPercent), o(au?.worstBlockMs, 3), o(au?.usedLatencyMs, 1),
+                o(au?.measuredLatencyMs, 1), o(d.music?.music, 3), o(d.music?.singing, 3), o(d.music?.speech, 3)]
     }
 }

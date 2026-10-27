@@ -45,6 +45,9 @@ struct NitLabHUD: View {
                     if let audio = snapshot.audioSummary {
                         line(audio, color: DS.secondary)
                     }
+                    ForEach(Array(snapshot.dialogLines.enumerated()), id: \.offset) { _, text in
+                        line(text, color: DS.secondary)
+                    }
                     line("GPU p50 \(TR.num(snapshot.gpuP50, 1)) · p95 \(TR.num(snapshot.gpuP95, 1)) ms (hedef ≤ \(snapshot.isHDR ? "3,0" : "1,5"))")
                     line("kare: düşen \(snapshot.droppedFrames) · kadans \(snapshot.cadence) · sapma \(TR.num(snapshot.vsyncJitterMs, 1)) ms")
                     if let ms = snapshot.lastSwitchMs {
