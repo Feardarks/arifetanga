@@ -30,12 +30,15 @@ public final class Resampler {
         self.inputRate = inputRate
         self.outputRate = outputRate
         let g = Self.gcd(inputRate, outputRate)
-        up = outputRate / g
-        down = inputRate / g
+        let L = outputRate / g
+        let M = inputRate / g
+        up = L
+        down = M
         // Toplam uzunluk L'nin katı: her fazda eşit sayıda katsayı.
-        let length = ((taps * max(up, down) + up - 1) / up) * up
-        tapsPerPhase = length / up
-        let fc = 0.5 * cutoff / Double(max(up, down))
+        let length = ((taps * max(L, M) + L - 1) / L) * L
+        let K = length / L
+        tapsPerPhase = K
+        let fc = 0.5 * cutoff / Double(max(L, M))
         let center = Double(length - 1) / 2
         var h = (0..<length).map { j -> Double in
             let x = Double(j) - center
@@ -46,11 +49,9 @@ public final class Resampler {
         }
         // DC kazancı: her fazın toplamı ≈ 1 (yukarı örneklemede L kazancı).
         let sum = h.reduce(0, +)
-        h = h.map { $0 * Double(up) / sum }
-        let L = up
-        let K = tapsPerPhase
+        h = h.map { $0 * Double(L) / sum }
         phases = (0..<L).map { p in (0..<K).map { k in Float(h[p + k * L]) } }
-        latency = center / Double(down)
+        latency = center / Double(M)
     }
 
     public func reset() {
