@@ -1,6 +1,6 @@
 # Nit Laboratuvarı: kurulum ve test rehberi
 
-**Sürüm 0.6.0 (S0 + S0b + S2).** Amaç, ürünün 1 numaralı vaadini cihazda ölçmek: iPhone 11 Pro + iOS 27, SDR'da da HDR'da da beyazı panel tepesine (≈ 1200 nit) çıkarabiliyor mu ve bunu film boyunca sürdürebiliyor mu? (02-cozum §10.1)
+**Sürüm 0.7.0 (S0 + S0b + S2 + S3).** Amaç, ürünün 1 numaralı vaadini cihazda ölçmek: iPhone 11 Pro + iOS 27, SDR'da da HDR'da da beyazı panel tepesine (≈ 1200 nit) çıkarabiliyor mu ve bunu film boyunca sürdürebiliyor mu? (02-cozum §10.1)
 
 ## 1. Kurulum
 
@@ -38,7 +38,7 @@ Sideloadly yolu yeterliyse bu bölümü atlayabilirsin. **Actions → İmzalı I
 
 ## 2. Test dosyaları
 
-**v0.5'ten itibaren MKV, M2TS ve TS dosyaları doğrudan açılır** (kendi hattımız: FFmpeg demux → VideoToolbox; HUD'daki biçim satırının sonunda "kendi hattımız" yazar). Bu yolda henüz **ses yok** (S3). MP4/MOV dosyaları varsayılan olarak AVPlayer ile açılır; Dosya panelindeki **MP4/MOV'u kendi hattımızla aç** anahtarıyla onlar da kendi hattımızdan oynatılır.
+**v0.5'ten itibaren MKV, M2TS ve TS dosyaları doğrudan açılır** (kendi hattımız: FFmpeg demux → VideoToolbox; HUD'daki biçim satırının sonunda "kendi hattımız" yazar). **v0.7'den itibaren bu yolda ses de var** (S3): E-AC-3 ve AC-3 sıkıştırılmış olarak Apple'a gider (Atmos dahil), TrueHD, DTS, FLAC, AAC ve diğerleri FFmpeg ile PCM'e çözülür. Şimdilik dosyadaki varsayılan ses izi çalınır; iz seçimi sonra gelecek. MP4/MOV dosyaları varsayılan olarak AVPlayer ile açılır; Dosya panelindeki **MP4/MOV'u kendi hattımızla aç** anahtarıyla onlar da kendi hattımızdan oynatılır.
 
 Aşağıdaki MP4 dönüşümleri artık yalnızca karşılaştırma içindir (AVPlayer yolu, AS-1 testi). Yeniden kodlama yapılmaz:
 
@@ -99,13 +99,17 @@ Dosyaları iPhone'a **Dosyalar** uygulaması (iCloud Drive, "iPhone'umda" ya da 
 | T14 | **Referans'ta Dolby Vision (AS-1, S2.3)** | DV **P8.1** bir MKV'yi Referans'ta aç. Aynı dosyanın RPU'su atılmış MP4'ünü (`hdr10.mp4`, yukarıda) de Referans'ta aç. Parlak sahnelerde ikisini karşılaştır. Sonra **P7** bir MKV (UHD Blu-ray'den) ile tekrarla. | DV tetikleniyorsa MKV'deki görüntü HDR10 sürümünden farklı (genellikle vurgularda daha kontrollü, sahneden sahneye değişen) olmalı. İkisi birebir aynıysa DV tetiklenmiyor demektir; yaz. P7'de biçim satırında "Referans'ta DV P8.1" ve olaylarda "DV P7 EL türü: MEL/FEL" görünmeli. |
 | T15 | **DV L1 sahne beyazı (AS-38 DV, AS-2)** | DV bir MKV'yi Nit'te, Parametreler → HDR referans beyazı = **Sahne** ile 10 dk izle. | HUD: `… · DV L1 (k = 4) · hist P90 X` satırı ve `RPU … · ort … · en kötü … ms` satırı. RPU süresi ortalamada < 2 ms olmalı. CSV'de `W_f` (L1'den), `W_hist` (histogramdan) ve `rpu_us` kolonları var; bu ikisinin oranından `k` kalibre edilecek. "DV L1 geçersiz" olayı çıkarsa yaz. |
 | T16 | **DV P5 Nit'te (AS-30, S2.4)** | Bir DV **P5** dosya aç (genellikle akış servislerinden gelen WEB-DL'ler; `ffprobe` çıktısında `dv_profile=5`). Nit'te birkaç dakika izle; aynı sahnelerde **Referans**'a geçip renkleri karşılaştır. Cilt tonu, gökyüzü, kırmızı/yeşil nesneler ve koyu sahnelere bak. | **Yeşil ya da mor renk kayması olmamalı**; renkler Referans'la aynı olmalı, yalnızca parlaklık farklı. HUD'da `P5 Nit: Y … parça poli · Cb … MMR3 · Cr … MMR3` satırı. "okunamayan" sayısı 0 olmalı. 2 sn içinde kod çözümü kurulamazsa uygulama kendiliğinden Referans'a geçer ve sebebini yazar; olursa ekran fotoğrafı al. |
+| T17 | **Atmos (AS-9, S3)** | AirPods (Pro/Max) tak. E-AC-3 **JOC** (Dolby Atmos) sesli bir MKV aç (genellikle WEB-DL'ler; `ffprobe` çıktısında `Dolby Digital Plus + Dolby Atmos` ya da `profile=30`). Oynatırken **Denetim Merkezi → ses düğmesine uzun bas**. Aynı dosyanın MP4'ünü (`ffmpeg -i film.mkv -map 0:v:0 -map 0:a:0 -c copy -tag:v hvc1 atmos.mp4`) AVPlayer yolunda da açıp karşılaştır. | HUD'da `Ses: E-AC-3 JOC 5.1 → Apple (Dolby Atmos, sıkıştırılmış)`. Denetim Merkezi'nde **"Dolby Atmos"** ya da uzamsal ses göstergesi yanıyor mu? MP4 ile aynı mı duyuluyor? Ekran fotoğrafı al. Göstergenin hiç çıkmaması da önemli bir sonuçtur, yaz. |
+| T18 | **TrueHD 7.1 ve kanal yerleşimi (AS-10)** | 7.1 kanal test dosyası (her kanalda sırayla konuşan "Left… Right surround…" tipi bir TrueHD MKV) ve bir TrueHD filmi aç. AirPods'ta ve hoparlörde dinle; başını çevir (head tracking). | HUD'da `Ses: TrueHD 7.1 → PCM float32 · çözme %x`. Her kanal **doğru yerden** gelmeli; özellikle yan (Ls/Rs) ve arka (Rls/Rrs) karışmamalı. Çözme yükü **%15'in altında** olmalı (CSV'de `ses_cpu_yuzde`). |
+| T19 | **Senkron ve geçişler (S3)** | Bir diyalog sahnesinde dudak senkronuna bak. İleri/geri sar, duraklat/oynat, **Nit ↔ Referans** geç, Döngü'nün başa sarmasını bekle. DTS, FLAC ya da AAC sesli bir dosyayla da tekrarla. | Ses ve görüntü senkron mu? Sarmada ses ≤ 0,5 s içinde gelmeli. Nit ↔ Referans geçişinde **ses kesilmemeli**. Takılma, tıklama ya da çift ses varsa zamanını yaz. |
 | T9 | **Dayanıklılık (K8, AS-28)** | HDR10 dosyası, Döngü açık, 2 saat. Üç ayrı çalıştırma: Nit + Tepe Kilidi, Nit (kilit kapalı), Referans. Şarjda değil, oda sıcaklığında. | CSV'yi paylaş. Headroom çöküşü olup olmadığını, ısıyı ve pil yüzdesini (başta ve sonda) not et. |
 
 Her testten sonra CSV'yi paylaşıp (AirDrop, Dosyalar ya da e-posta) bana gönderebilirsin. Raporu (`τ_up`, `w`/`κ`, γ, titreşim ve Tepe Kilidi varsayılanları) bu verilerden çıkaracağım.
 
-## 5. Bilinen sınırlar (v0.5)
+## 5. Bilinen sınırlar (v0.7)
 
-- Kendi hattımızda (MKV/M2TS/TS) ses yok; S3'te gelecek. Altyazı ve PiP yok.
+- Ses: dosyanın varsayılan izi çalınır; iz seçimi, gece modu, diyalog (M9) ve boost (M10) sonraki adımlarda. TrueHD Atmos ve DTS:X'in nesneleri çözülmez; 7.1 yatak çalınır (konseptte bilinçli olarak elendi). Altyazı ve PiP yok.
+- Bluetooth gecikmesi henüz telafi edilmiyor (AS-22, S8).
 - Dolby Vision **P5** Nit'te kendi kod çözümümüzle (RPU şekillendirme + IPT → LMS → BT.2020) gösterilir. Henüz cihazda doğrulanmadı (T16). Dolby'nin kendi ton eşlemesi (DM) yerine Nit eğrisi kullanılır; parlaklık farkı bu yüzden beklenir, renk farkı beklenmez.
 - UHD Blu-ray'in **iki ayrı PID'li** M2TS'sinde (BL ve EL ayrı akış) yalnızca BL okunur: görüntü HDR10 olarak oynar, DV devreye girmez. MKV'ye (makemkv / dovi_tool ile tek iz) dönüştürülmüş P7 dosyalarında DV çalışır.
 - DV'de L2/L8 trim düzeltmesi henüz uygulanmıyor; sahne beyazı yalnızca L1'den (`k = 4`).

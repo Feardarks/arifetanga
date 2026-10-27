@@ -172,6 +172,9 @@ struct LabSnapshot {
     var rpuMeanMicros: Double?
     /// DV P5 Nit kod çözümü özeti (S2.4): parça türleri, eşleme sayısı, okunamayanlar.
     var reshapeSummary: String?
+    /// Ses hattı (S3): codec, düzen, yol (Atmos sıkıştırılmış / PCM) ve FFmpeg çözme yükü (AS-10).
+    var audioSummary: String?
+    var audioCPUPercent: Double?
 
     /// P-2: çıkış hiçbir zaman sistemin o an verdiği headroom'u aşmaz.
     var p2OK: Bool { outputMax <= hCur + 1e-6 }

@@ -10,8 +10,8 @@ options:
 
 settings:
   base:
-    MARKETING_VERSION: "0.6.0"
-    CURRENT_PROJECT_VERSION: "6"
+    MARKETING_VERSION: "0.7.0"
+    CURRENT_PROJECT_VERSION: "7"
     SWIFT_VERSION: "5.0"
     SWIFT_STRICT_CONCURRENCY: minimal
     # İmza ayarları yalnızca uygulama hedefinin okuduğu değişkenlerle verilir; release.yml bunları

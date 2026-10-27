@@ -26,14 +26,12 @@ final class FrameQueue: @unchecked Sendable {
         return frames.count
     }
 
-    /// Kod çözmeye gönderilmeden önce yer ayırır; kuyruk doluysa bekler. İptal edilirse `false`.
-    func reserve() -> Bool {
+    /// Kod çözmeye gönderilmeden önce yer ayırır; kuyruk doluysa ya da iptal edildiyse beklemeden `false`.
+    /// Demux döngüsü beklemez; bu arada ses beslenmeye devam eder (S3).
+    func tryReserve() -> Bool {
         condition.lock()
         defer { condition.unlock() }
-        while frames.count + inFlight >= capacity, !cancelled {
-            condition.wait(until: Date().addingTimeInterval(0.05))
-        }
-        guard !cancelled else { return false }
+        guard !cancelled, frames.count + inFlight < capacity else { return false }
         inFlight += 1
         return true
     }
@@ -135,10 +133,13 @@ final class NativeVideoDecoder {
         }
     }
 
-    /// Bir örneği asenkron çözer; kare kuyruğa PTS'siyle girer. Kuyrukta yer yoksa bekler.
+    /// Bir örneği asenkron çözer; kare kuyruğa PTS'siyle girer. Çağıran önce `FrameQueue.tryReserve()` ile yer ayırır.
     @discardableResult
     func decode(_ sample: CMSampleBuffer) -> Bool {
-        guard let session, queue.reserve() else { return false }
+        guard let session else {
+            queue.release()
+            return false
+        }
         let queue = self.queue
         let status = VTDecompressionSessionDecodeFrame(session, sampleBuffer: sample,
                                                        flags: [._EnableAsynchronousDecompression],

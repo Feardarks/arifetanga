@@ -87,6 +87,10 @@ final class LabEngine: NSObject {
 
     // Kendi hattımız (S2.2): MKV/M2TS ve istenirse MP4/MOV.
     private var native: NativePlayer?
+    /// S3: tek saat. Ses renderer'ı ve Referans katmanı synchronizer'a bir kez eklenir, dosyalar arasında paylaşılır.
+    private let synchronizer = AVSampleBufferRenderSynchronizer()
+    private let audioRenderer = AVSampleBufferAudioRenderer()
+    private var loggedAudioLabel: String?
     /// DV P5'in şekillendirme verisi okunamazsa Nit yerine Referans gösterilir (yanlış renk yerine).
     private var nativeForcedReference = false
     private static let nativeExtensions: Set<String> = ["mkv", "webm", "m2ts", "mts", "ts"]
@@ -116,6 +120,10 @@ final class LabEngine: NSObject {
             snapshot.errorMessage = "Metal başlatılamadı"
         }
         surface.playerLayer.player = player
+        // Çok kanallı PCM ve native Atmos sistemin uzamsallaştırıcısına gider; stereo stereo kalır (02-cozum §5.3).
+        audioRenderer.allowedAudioSpatializationFormats = .multichannel
+        synchronizer.addRenderer(audioRenderer)
+        synchronizer.addRenderer(surface.sampleLayer)
         surface.apply(.single(effectiveMode))
         surface.onLayout = { [weak self] in
             self?.needsRender = true
@@ -607,6 +615,7 @@ final class LabEngine: NSObject {
             }
             snapshot.playing = isPlayingNow
             snapshot.recordingSeconds = telemetry.elapsed
+            fillAudioSnapshot()
             fillSceneWhiteSnapshot()
             fillRpuSnapshot()
             onSnapshot?(snapshot)
@@ -624,9 +633,12 @@ final class LabEngine: NSObject {
         let path = url.path
         let output: NativePlayer.Output = params.mode == .nit ? .nit : .reference
         let title = url.lastPathComponent
+        let synchronizer = self.synchronizer
+        let audioRenderer = self.audioRenderer
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             do {
-                let player = try NativePlayer(path: path, output: output)
+                let player = try NativePlayer(path: path, output: output, synchronizer: synchronizer,
+                                              audioRenderer: audioRenderer)
                 DispatchQueue.main.async { MainActor.assumeIsolated { self?.attachNative(player, title: title) } }
             } catch {
                 let message = error.localizedDescription
@@ -674,7 +686,6 @@ final class LabEngine: NSObject {
         p5WaitingSince = nil
         loggedReshapeFailures = 0
         surface.nativeBackend = true
-        surface.sampleLayer.controlTimebase = player.timebase
         player.attach(renderer: surface.sampleLayer.sampleBufferRenderer)
         player.loop = loop
         player.onLoop = { [weak self] in MainActor.assumeIsolated { self?.nativeLooped() } }
@@ -689,8 +700,42 @@ final class LabEngine: NSObject {
             event("DV P5: Nit'te IPTPQc2 kod çözümü (RPU şekillendirme + IPT → LMS → BT.2020)")
         }
         event("Kendi hattımız: \(info.label)" + (info.maxCLL.map { " · MaxCLL \(Int($0))" } ?? "")
-              + " · çapa \(TR.num(initialAnchor, 0)) nit · ses S3'te")
+              + " · çapa \(TR.num(initialAnchor, 0)) nit")
+        loggedAudioLabel = nil
+        if let audio = player.audioInfo {
+            let language = audio.language.map { " · \($0)" } ?? ""
+            event("Ses izi: \(audio.codecName) · \(audio.channels) kanal · \(audio.sampleRate) Hz\(language)"
+                  + (audio.profile == 30 ? " · Atmos" : ""))
+            if let error = player.audioOpenError { event("Ses açılamadı: \(error) (görüntü sessiz oynar)") }
+        } else {
+            event("Dosyada ses izi yok")
+        }
         player.start()
+    }
+
+    /// Ses satırı (HUD) ve yol değişince tek seferlik olay (ör. "E-AC-3 JOC → Apple (Dolby Atmos)").
+    private func fillAudioSnapshot() {
+        guard let native else {
+            snapshot.audioSummary = nil
+            snapshot.audioCPUPercent = nil
+            return
+        }
+        guard let status = native.audioStatus else {
+            if native.audioInfo == nil {
+                snapshot.audioSummary = "Ses: yok"
+            } else {
+                snapshot.audioSummary = "Ses: \(native.audioInfo?.codecName ?? "?") açılamadı"
+            }
+            snapshot.audioCPUPercent = nil
+            return
+        }
+        snapshot.audioSummary = status.label
+        snapshot.audioCPUPercent = status.decodeCPUPercent
+        let key = "\(status.codec) \(status.layout) \(status.path)"
+        if key != loggedAudioLabel {
+            loggedAudioLabel = key
+            event(status.label)
+        }
     }
 
     /// P5 karesi kod çözüm parametreleri olmadan geldi. 2 sn içinde gelmezse Referans'a geçilir:
@@ -901,6 +946,6 @@ final class LabEngine: NSObject {
             jitterMs: snapshot.vsyncJitterMs, outputMax: snapshot.outputMax, playing: snapshot.playing,
             referenceWhite: snapshot.referenceWhite, frameWhite: snapshot.frameWhite, sceneWhite: snapshot.sceneWhite,
             anchor: snapshot.anchor, histogramWhite: snapshot.histogramWhite, rpuMicros: snapshot.rpuMeanMicros,
-            chromeVisible: chromeVisible, panel: panelName, event: event)
+            audioCPU: snapshot.audioCPUPercent, chromeVisible: chromeVisible, panel: panelName, event: event)
     }
 }

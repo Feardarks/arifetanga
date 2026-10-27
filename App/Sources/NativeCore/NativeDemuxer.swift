@@ -71,13 +71,58 @@ struct VideoStreamInfo {
     }
 }
 
-/// Demux edilmiş bir video paketi (uzunluk önekli NAL'lar, kod çözme sırasında).
+/// Seçilen ses akışı (S3). Çözücüyü açmak için codec parametrelerinin bir kopyasını taşır.
+final class AudioStreamInfo: @unchecked Sendable {
+    let codecID: AVCodecID
+    let codecName: String
+    let sampleRate: Int
+    let channels: Int
+    /// FFmpeg profili; E-AC-3 JOC ve TrueHD Atmos için `AV_PROFILE_*_ATMOS` (30) olabilir.
+    let profile: Int32
+    let language: String?
+    let title: String?
+    let parameters: UnsafeMutablePointer<AVCodecParameters>
+
+    init?(stream: UnsafeMutablePointer<AVStream>) {
+        guard let copy = avcodec_parameters_alloc() else { return nil }
+        guard avcodec_parameters_copy(copy, stream.pointee.codecpar) >= 0 else {
+            var p: UnsafeMutablePointer<AVCodecParameters>? = copy
+            avcodec_parameters_free(&p)
+            return nil
+        }
+        parameters = copy
+        let par = stream.pointee.codecpar.pointee
+        codecID = par.codec_id
+        codecName = String(cString: avcodec_get_name(par.codec_id))
+        sampleRate = Int(par.sample_rate)
+        channels = Int(par.ch_layout.nb_channels)
+        profile = par.profile
+        func tag(_ key: String) -> String? {
+            av_dict_get(stream.pointee.metadata, key, nil, 0).flatMap { $0.pointee.value.map { String(cString: $0) } }
+        }
+        language = tag("language")
+        title = tag("title")
+    }
+
+    deinit {
+        var p: UnsafeMutablePointer<AVCodecParameters>? = parameters
+        avcodec_parameters_free(&p)
+    }
+}
+
+/// Demux edilmiş bir paket. Video: uzunluk önekli NAL'lar, kod çözme sırasında. Ses: codec'in ham paketi.
 struct DemuxedPacket {
+    enum Kind {
+        case video
+        case audio
+    }
+
     var data: Data
     var pts: CMTime
     var dts: CMTime
     var duration: CMTime
     var keyframe: Bool
+    var kind: Kind = .video
 }
 
 enum DemuxError: LocalizedError {
@@ -94,13 +139,16 @@ enum DemuxError: LocalizedError {
     }
 }
 
-/// libavformat ile demux (02-cozum §4.1). Yalnızca video akışı; ses S3'te.
+/// libavformat ile demux (02-cozum §4.1): video akışı ve (varsa) en uygun ses akışı.
 /// Tek bir thread'den kullanılmalıdır (NativePlayer'ın demux thread'i).
 final class NativeDemuxer {
     private var context: UnsafeMutablePointer<AVFormatContext>?
     private var packet: UnsafeMutablePointer<AVPacket>?
     private let streamIndex: Int32
+    private let audioIndex: Int32
+    private let audioTimeBase: (num: Int32, den: Int32)
     let info: VideoStreamInfo
+    let audio: AudioStreamInfo?
 
     init(path: String) throws {
         // `opened` kapatma için isteğe bağlı kalır; `ctx` açık bağlamın kendisidir.
@@ -116,8 +164,15 @@ final class NativeDemuxer {
             avformat_close_input(&opened)
             throw DemuxError.noVideo
         }
-        // Diğer akışları yok say: paket okuma maliyeti düşer.
-        for i in 0..<Int(ctx.pointee.nb_streams) where i != Int(index) {
+        // Ses: videoyla ilişkili en iyi akış (S3). Diğer akışlar yok sayılır; paket okuma maliyeti düşer.
+        let audioIndex = av_find_best_stream(ctx, AVMEDIA_TYPE_AUDIO, -1, index, nil, 0)
+        var audio: AudioStreamInfo?
+        var audioTimeBase: (num: Int32, den: Int32) = (1, 1)
+        if audioIndex >= 0, let audioStream = ctx.pointee.streams[Int(audioIndex)] {
+            audio = AudioStreamInfo(stream: audioStream)
+            audioTimeBase = (audioStream.pointee.time_base.num, audioStream.pointee.time_base.den)
+        }
+        for i in 0..<Int(ctx.pointee.nb_streams) where i != Int(index) && (audio == nil || i != Int(audioIndex)) {
             ctx.pointee.streams[i]?.pointee.discard = AVDISCARD_ALL
         }
         do {
@@ -128,6 +183,9 @@ final class NativeDemuxer {
         }
         context = ctx
         streamIndex = index
+        self.audio = audio
+        self.audioIndex = audio == nil ? -1 : audioIndex
+        self.audioTimeBase = audioTimeBase
         packet = av_packet_alloc()
     }
 
@@ -136,18 +194,22 @@ final class NativeDemuxer {
         avformat_close_input(&context)
     }
 
-    /// Bir sonraki video paketini okur; dosya sonunda `nil`.
+    /// Bir sonraki video ya da ses paketini okur; dosya sonunda `nil`.
     func readPacket() -> DemuxedPacket? {
         guard let context, let packet else { return nil }
         while true {
             let result = av_read_frame(context, packet)
             if result < 0 { return nil }
             defer { av_packet_unref(packet) }
-            guard packet.pointee.stream_index == streamIndex, packet.pointee.size > 0, let bytes = packet.pointee.data else { continue }
+            let index = packet.pointee.stream_index
+            guard index == streamIndex || index == audioIndex, packet.pointee.size > 0,
+                  let bytes = packet.pointee.data else { continue }
             let size = Int(packet.pointee.size)
-            let data = info.annexB ? NALUnits.lengthPrefixed(fromAnnexB: UnsafeRawBufferPointer(start: bytes, count: size))
-                                   : Data(bytes: bytes, count: size)
-            let tb = info.timeBase
+            let isAudio = index == audioIndex
+            let data = info.annexB && !isAudio
+                ? NALUnits.lengthPrefixed(fromAnnexB: UnsafeRawBufferPointer(start: bytes, count: size))
+                : Data(bytes: bytes, count: size)
+            let tb = isAudio ? audioTimeBase : info.timeBase
             let nopts = arif_nopts_value()
             let rawPTS = packet.pointee.pts != nopts ? packet.pointee.pts : packet.pointee.dts
             let rawDTS = packet.pointee.dts != nopts ? packet.pointee.dts : rawPTS
@@ -157,7 +219,7 @@ final class NativeDemuxer {
             return DemuxedPacket(data: data,
                                  pts: time(rawPTS), dts: time(rawDTS),
                                  duration: packet.pointee.duration > 0 ? time(packet.pointee.duration) : .invalid,
-                                 keyframe: packet.pointee.flags & AV_PKT_FLAG_KEY != 0)
+                                 keyframe: packet.pointee.flags & AV_PKT_FLAG_KEY != 0, kind: isAudio ? .audio : .video)
         }
     }
 

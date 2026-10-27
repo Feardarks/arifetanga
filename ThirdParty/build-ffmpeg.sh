@@ -31,8 +31,10 @@ cd "$SRC"
   --disable-avdevice --disable-avfilter --disable-swscale --disable-swresample \
   --enable-protocol=file \
   --enable-demuxer=matroska,mov,mpegts \
-  --enable-parser=hevc,h264,av1,vc1,mpeg4video,mpegvideo,ac3,aac,dca,mlp,flac,opus \
-  --enable-bsf=hevc_mp4toannexb,h264_mp4toannexb,extract_extradata
+  --enable-parser=hevc,h264,av1,vc1,mpeg4video,mpegvideo,ac3,aac,aac_latm,dca,mlp,flac,opus,vorbis,mpegaudio \
+  --enable-bsf=hevc_mp4toannexb,h264_mp4toannexb,extract_extradata \
+  --enable-decoder=truehd,mlp,dca,flac,alac,aac,aac_latm,mp3float,mp2float,opus,vorbis \
+  --enable-decoder=pcm_s16le,pcm_s16be,pcm_s24le,pcm_s24be,pcm_s32le,pcm_f32le,pcm_bluray,pcm_dvd
 make -j"$(sysctl -n hw.ncpu)"
 make install
 
