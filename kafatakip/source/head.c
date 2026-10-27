@@ -15,9 +15,9 @@ HeadPos head_from_face(const Face* face, int camWidth, int camHeight, bool flipX
 
 	float eyeRow = face->y - EYES_ABOVE_BOX * face->size;
 
-	// İç kamera izleyiciye bakar: izleyici kendi sağına gidince yüz görüntüde
-	// sola kayar. Görüntü satırları aşağı doğru artar.
-	float dx = -(face->x - camWidth / 2.0f) * cmPerPixel;
+	// İç kamera görüntüyü ayna gibi verir (konsolda doğrulandı): izleyici kendi
+	// sağına gidince yüz görüntüde de sağa kayar. Görüntü satırları aşağı doğru artar.
+	float dx = (face->x - camWidth / 2.0f) * cmPerPixel;
 	float dy = -(eyeRow - camHeight / 2.0f) * cmPerPixel;
 	if (flipX)
 		dx = -dx;

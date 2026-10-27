@@ -68,8 +68,8 @@ static void draw_radar(bool hasFace, const Face* face)
 {
 	int fc = -1, fr = -1;
 	if (hasFace) {
-		// Ayna gibi göster: izleyici sağa gidince işaret de sağa gitsin.
-		fc = (int)((CAM_W - 1 - face->x) * RADAR_COLS / CAM_W);
+		// Kamera görüntüsü zaten ayna gibi: izleyici sağa gidince işaret de sağa gider.
+		fc = (int)(face->x * RADAR_COLS / CAM_W);
 		fr = (int)(face->y * RADAR_ROWS / CAM_H);
 	}
 
