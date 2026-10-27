@@ -13,8 +13,14 @@ typedef struct {
 // Pico yüz kaskadını yükler.
 bool face_init(void);
 
-// Gri görüntüde yüz arar. Eşiği geçen yüzleri güvene göre azalan sırada
+// Tüm görüntüde yüz arar. Eşiği geçen yüzleri güvene göre azalan sırada
 // out dizisine yazar ve sayısını döndürür.
 int face_detect(const u8* gray, int width, int height, float qthreshold, Face* out, int maxOut);
+
+// Sadece (rx, ry, rw, rh) bölgesinde, minSize..maxSize boyutundaki yüzleri
+// arar. Sonuç koordinatları tüm görüntüye göredir.
+int face_detect_region(const u8* gray, int width, int height,
+	int rx, int ry, int rw, int rh, float minSize, float maxSize,
+	float qthreshold, Face* out, int maxOut);
 
 void face_exit(void);

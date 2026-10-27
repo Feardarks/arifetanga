@@ -27,11 +27,28 @@ bool face_init(void)
 	return true;
 }
 
-int face_detect(const u8* gray, int width, int height, float qthreshold, Face* out, int maxOut)
+int face_detect_region(const u8* gray, int width, int height,
+	int rx, int ry, int rw, int rh, float minSize, float maxSize,
+	float qthreshold, Face* out, int maxOut)
 {
+	if (rx < 0) { rw += rx; rx = 0; }
+	if (ry < 0) { rh += ry; ry = 0; }
+	if (rx + rw > width) rw = width - rx;
+	if (ry + rh > height) rh = height - ry;
+
+	// Pencere bölgenin içine sığmalı.
+	int limit = (rw < rh ? rw : rh) - 2;
+	if (maxSize > limit)
+		maxSize = limit;
+	if (minSize > maxSize)
+		return 0;
+
+	// pico satır adımı (ldim) olarak tam görüntü genişliğini kullanır, böylece
+	// bölge kopyalanmadan doğrudan aranır.
+	const u8* origin = gray + ry * width + rx;
 	int n = find_objects(s_rcsq, MAX_RAW_DETECTIONS, s_cascade, 0.0f,
-		(void*)gray, height, width, width,
-		SCALE_FACTOR, STRIDE_FACTOR, MIN_SIZE, (float)height);
+		(void*)origin, rh, rw, width,
+		SCALE_FACTOR, STRIDE_FACTOR, minSize, maxSize);
 	n = cluster_detections(s_rcsq, n);
 
 	int count = 0;
@@ -46,12 +63,18 @@ int face_detect(const u8* gray, int width, int height, float qthreshold, Face* o
 			out[j] = out[j - 1];
 			j--;
 		}
-		out[j].y = s_rcsq[4 * i + 0];
-		out[j].x = s_rcsq[4 * i + 1];
+		out[j].y = s_rcsq[4 * i + 0] + ry;
+		out[j].x = s_rcsq[4 * i + 1] + rx;
 		out[j].size = s_rcsq[4 * i + 2];
 		out[j].q = q;
 	}
 	return count;
+}
+
+int face_detect(const u8* gray, int width, int height, float qthreshold, Face* out, int maxOut)
+{
+	return face_detect_region(gray, width, height, 0, 0, width, height,
+		MIN_SIZE, (float)height, qthreshold, out, maxOut);
 }
 
 void face_exit(void)
