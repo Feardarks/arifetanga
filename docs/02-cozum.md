@@ -1754,6 +1754,15 @@ Packages/DesignSystem/{Package.swift, Sources/DSCore/*, Sources/DesignSystem/{To
 > - **Çok kanallı:** Kademe 1–2'de `C·(1+a)`, kademe 3'te `C + a·izole(C)`; diğer kanallar yalnızca `c` ile ölçeklenir. Merkezi olmayan çok kanallı düzenlerde stereo formülü tüm kanallara uygulanır (nadir).
 > - **Arka plan:** `didEnterBackground`'da video paketleri atılır (ekran yokken kare kuyruğu dolup sesi aç bırakmasın), `willEnterForeground`'da video o anki zamandan yeniden doldurulur; ses kesilmez.
 
+> **Uygulama notu: S5 v0.9 (M10 boost ve limiter).** Hedef yapıdan (§5.5) sapan ya da ona eklenen noktalar:
+> - **Yer:** M10, S4'teki ses evresinin sonunda çalışır (Dolby çözme → M9 → M10). Ayrı bir "geç evre" yok; evre renderer'ın ~1–2 s önünde işler. Boost yöneticisinin "ileriye bakışı" 1 s'lik gecikme hattıyla yapılır (kazanç, 1 s sonraki sesi de görmüş loudness'a göre uygulanır); toplam gecikme kipten bağımsız sabittir (1 s + 2 ms ön bakış + 6 örnek gerçek tepe dedektörü) ve PTS'leri etkilemez.
+> - **Limiter:** Gerçek tepe BS.1770-4 Ek 2 katsayılarıyla (Python başvurusuyla doğrulandı). Gerekli kazancın L+1 örneklik kayan minimumu, ardından son L zarf değerinin Hann ağırlıklı ortalaması: her ağırlık gerekli kazancın altında kaldığından tavan matematiksel olarak korunur (−0,1 dB pay). İki kademeli bırakma: hızlı zarf (anlık atak, 60 ms) ve yavaş zarf (150 ms atak, 400 ms bırakma); kısa olaylar hızlı, süreğen sınırlama yavaş bırakılır. Pencerede eşiği aşamayacak sinyal için ara değer hesaplanmaz (CPU).
+> - **Kipler:** Akıllı / Yalnızca limiter / Kapalı (±1,0 sert kırpma) / Ham float (laboratuvar). %100'de evre M9 kapalıysa hiç çalışmaz (birebir geçiş, Atmos korunur); M9 açıksa %100'de de limiter M9 çıkışının tepelerini korur.
+> - **Göstergeler:** Kilitsiz SPSC halkası yerine kilitli küçük bir kayıt kuyruğu (DSP gerçek zamanlı thread'de değil, demux thread'inde). Her 256 karelik kayıt (≈ 5 ms) karşılık geldiği ham örneğin PTS'ini taşır; arayüz oynatma saatine kadar olanları okur. Yeniden işlemede flush'la atılan kısmın kayıtları silinir; kırpma toplamı yalnızca duyulanı sayar. Arayüz 30 Hz yerine 10 Hz'de yenilenir.
+> - **Anahtar ve kaydırıcı:** "İki yol paralel" yerine, eski yolun flush'la atılan çıktısı saklanır ve yeni yolun ilk 20 ms'iyle doğrusal geçişle birleştirilir (aynı PTS'li örnekler). Sıkıştırılmış Atmos ↔ PCM geçişinde birleştirme yapılamaz. Tepki: AU yoksa kesim oynatma başının 0,12 s önünden (hedef ≤ 100 ms'e yakın), AU varsa 0,5 s.
+> - **Rota:** Sınıf `AVAudioSession.currentRoute`'tan (hoparlör, kulaklık, Bluetooth, AirPlay, USB, diğer); Bluetooth'ta tavan −1,5 dBTP, hoparlörde 150 Hz HPF. Boost rota sınıfı başına hatırlanır; yeni rotanın kaydı yoksa %100. İçerik bazında hatırlama yok.
+> - **AS-37 g:** Laboratuvarda renderer `volume = 1,5` denemesi ve "Ham" kip; okunan değer CSV'ye yazılır. Tasarım bunlara dayanmaz.
+
 ### 10.3 AS-37: Boost ve limiter (M10)
 
 | Senaryo | Ölçüt |
