@@ -223,6 +223,17 @@ final class NativePlayer: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// Uygulama arka plana geçti/döndü: arka planda video atılır, diyalog F1'e geçer (çapraz geçişle);
+    /// dönüşte video o anki zamandan yeniden doldurulur, ses kesilmez.
+    func setBackground(_ value: Bool) {
+        lock.lock()
+        let changed = value != backgroundRequested
+        backgroundRequested = value
+        if changed, !value { pendingSeek = (mediaTime, true) }
+        lock.unlock()
+        if changed, !value { frames.cancel() }
+    }
+
     private func markStageDirty() {
         lock.lock()
         stageDirty = true
