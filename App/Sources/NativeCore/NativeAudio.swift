@@ -132,7 +132,7 @@ final class NativeAudioPipeline {
             guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return -1 }
             return CMAudioFormatDescriptionCreateFromBigEndianSoundDescriptionData(
                 allocator: kCFAllocatorDefault, bigEndianSoundDescriptionData: base, size: entry.count,
-                soundDescriptionFlavor: kCMSoundDescriptionFlavor_ISOFamily, formatDescriptionOut: &format)
+                flavor: kCMSoundDescriptionFlavor_ISOFamily, formatDescriptionOut: &format)
         }
         return status == noErr ? format : nil
     }
