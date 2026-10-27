@@ -1,7 +1,7 @@
 name: NitMath testleri
 
 # Renk matematiği, Nit eğrisi, headroom süzgeci, Tepe Kilidi, sahne beyazı ve NAL/hvcC yardımcıları (MediaFormat)
-# saf Swift'tir; ucuz Linux runner'ında test edilir.
+# ve ses DSP'si (AudioDSP: loudness, F1 merkez çıkarma, M9 diyalog çekirdeği) saf Swift'tir; ucuz Linux runner'ında test edilir.
 on:
   workflow_dispatch:
   push:
