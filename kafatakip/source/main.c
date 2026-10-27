@@ -16,6 +16,7 @@
 
 #include "camera.h"
 #include "face.h"
+#include "gyro.h"
 #include "head.h"
 #include "oneeuro.h"
 #include "scene.h"
@@ -38,6 +39,8 @@ u32 __stacksize__ = 128 * 1024;
 #define MANUAL_RANGE_X_CM 8.0f  // circle pad tam itildiğinde ek kayma
 #define MANUAL_RANGE_Y_CM 5.0f
 #define HUD_INTERVAL_MS   250
+#define CAMERA_LATENCY_MS 60    // kamera karesinin yakalanmasıyla bize gelmesi arası (tahmini)
+#define CAMERA_BLEND      0.3f  // gyro füzyonunda her kamera karesinin tahmine etkisi
 
 // Alt ekran radarı (kamera görüntüsünün küçük haritası)
 #define RADAR_COLS 30
@@ -145,16 +148,23 @@ int main(void)
 	oneeuro_init(&filterY, 1.0f, 0.15f, 1.0f);
 	oneeuro_init(&filterZ, 0.5f, 0.05f, 1.0f);
 
+	bool gyroOk = gyro_init();
+	bool gyroEnabled = true;
+
 	float qthreshold = 5.0f;
 	float gain = 1.0f;
 	bool flipX = false, flipY = false;
 	float offsetX = 0.0f, offsetY = 0.0f;
 
-	HeadPos lastRaw = { 0.0f, 0.0f, DEFAULT_HEAD_Z_CM };
-	HeadPos head = { 0.0f, 0.0f, DEFAULT_HEAD_Z_CM };
+	// Kafa konumu tahmini (ham, cm): kamera ölçümü + gyro ile ara tahmin.
+	float estX = 0.0f, estY = 0.0f, estZ = DEFAULT_HEAD_Z_CM;
+	HeadPos prevRaw = { 0.0f, 0.0f, DEFAULT_HEAD_Z_CM };
+	u64 prevCapMs = 0;
+	bool havePrev = false;
 	bool everSeen = false;
 
 	u64 startMs = osGetTime();
+	u64 lastLoopMs = startMs;
 	u64 lastCamMs = startMs;
 	u64 lastSeenMs = 0;
 	u64 lastHudMs = startMs;
@@ -179,10 +189,12 @@ int main(void)
 			flipX = !flipX;
 		if (kDown & KEY_Y)
 			flipY = !flipY;
+		if (kDown & KEY_SELECT)
+			gyroEnabled = !gyroEnabled;
 		if (kDown & KEY_A) {
 			// Şu anki konumu merkez kabul et.
-			offsetX = -lastRaw.x;
-			offsetY = -lastRaw.y;
+			offsetX = -estX;
+			offsetY = -estY;
 		}
 		if (kDown & KEY_B) {
 			offsetX = 0.0f;
@@ -190,6 +202,21 @@ int main(void)
 		}
 
 		u64 nowMs = osGetTime();
+		float loopDt = (nowMs - lastLoopMs) / 1000.0f;
+		lastLoopMs = nowMs;
+
+		// Gyro: konsol dönünce kafanın ekrana göre kaymasını anında uygula.
+		bool fuse = gyroOk && gyroEnabled && gyro_trained();
+		if (gyroOk) {
+			float rot[3];
+			gyro_update(nowMs, loopDt, rot);
+			if (fuse) {
+				float dx, dy;
+				gyro_head_shift(rot, estZ, &dx, &dy);
+				estX += dx;
+				estY += dy;
+			}
+		}
 
 		// Yeni kamera karesi varsa takip et (beklemeden kontrol).
 		if (camera_wait_frame(0)) {
@@ -206,32 +233,61 @@ int main(void)
 			lastCamMs = nowMs;
 
 			if (found) {
-				lastRaw = head_from_face(&tracker.face, CAM_W, CAM_H, flipX, flipY);
+				HeadPos raw = head_from_face(&tracker.face, CAM_W, CAM_H, flipX, flipY);
+				// Kare ekrana gelmeden önce yakalandı; gyro ile eşleştirirken bu gecikme düşülür.
+				u64 capMs = nowMs > CAMERA_LATENCY_MS ? nowMs - CAMERA_LATENCY_MS : 0;
+
+				// Gyro eşlemesini öğren: iki kare arasındaki kafa kayması ile dönüş.
+				if (gyroOk && havePrev) {
+					float rot[3];
+					gyro_integral(prevCapMs, capMs, rot);
+					gyro_learn(rot, raw.x - prevRaw.x, raw.y - prevRaw.y, raw.z);
+				}
+				prevRaw = raw;
+				prevCapMs = capMs;
+				havePrev = true;
+
+				float fx = oneeuro_filter(&filterX, raw.x, dt);
+				float fy = oneeuro_filter(&filterY, raw.y, dt);
+				estZ = oneeuro_filter(&filterZ, raw.z, dt);
+
+				if (fuse) {
+					// Kamera ölçümü yakalandığı andan beri gyro'nun gördüğü dönüşle
+					// bugüne taşınır, sonra tahmine yumuşakça karıştırılır.
+					float rot[3], dx, dy;
+					gyro_integral(capMs, nowMs, rot);
+					gyro_head_shift(rot, estZ, &dx, &dy);
+					estX += CAMERA_BLEND * (fx + dx - estX);
+					estY += CAMERA_BLEND * (fy + dy - estY);
+				} else {
+					estX = fx;
+					estY = fy;
+				}
+
 				lastSeenMs = nowMs;
 				everSeen = true;
-
-				head.x = oneeuro_filter(&filterX, (lastRaw.x + offsetX) * gain, dt);
-				head.y = oneeuro_filter(&filterY, (lastRaw.y + offsetY) * gain, dt);
-				head.z = oneeuro_filter(&filterZ, lastRaw.z, dt);
+			} else {
+				havePrev = false;
 			}
 		}
 
 		// Yüz uzun süre görülmezse yavaşça merkeze dön.
 		if (!everSeen || nowMs - lastSeenMs > LOST_RETURN_MS) {
-			head.x += (0.0f - head.x) * 0.05f;
-			head.y += (0.0f - head.y) * 0.05f;
-			head.z += (DEFAULT_HEAD_Z_CM - head.z) * 0.05f;
+			estX += (-offsetX - estX) * 0.05f;
+			estY += (-offsetY - estY) * 0.05f;
+			estZ += (DEFAULT_HEAD_Z_CM - estZ) * 0.05f;
 			oneeuro_reset(&filterX);
 			oneeuro_reset(&filterY);
 			oneeuro_reset(&filterZ);
+			havePrev = false;
 		}
 
 		// Circle pad ile elle kafa kaydırma (takip olmadan test için).
 		circlePosition pad;
 		hidCircleRead(&pad);
-		float eyeX = head.x + pad.dx / 156.0f * MANUAL_RANGE_X_CM;
-		float eyeY = head.y + pad.dy / 156.0f * MANUAL_RANGE_Y_CM;
-		float eyeZ = head.z < MIN_HEAD_Z_CM ? MIN_HEAD_Z_CM : head.z;
+		float eyeX = (estX + offsetX) * gain + pad.dx / 156.0f * MANUAL_RANGE_X_CM;
+		float eyeY = (estY + offsetY) * gain + pad.dy / 156.0f * MANUAL_RANGE_Y_CM;
+		float eyeZ = estZ < MIN_HEAD_Z_CM ? MIN_HEAD_Z_CM : estZ;
 
 		float slider = osGet3DSliderState();
 		float halfEye = EYE_DISTANCE_CM * slider / 2.0f;
@@ -266,10 +322,19 @@ int main(void)
 			printf("\x1b[8;1HEsik L/R: %4.1f  Kazanc dpad: %4.2f ", qthreshold, gain);
 			printf("\x1b[9;1HTers X/Y: yatay %s  dikey %s ", flipX ? "EVET " : "hayir", flipY ? "EVET " : "hayir");
 			printf("\x1b[10;1H3D slider: %4.2f ", slider);
+			if (!gyroOk)
+				printf("\x1b[11;1HGyro    : \x1b[31mbaslatilamadi\x1b[0m                ");
+			else if (!gyroEnabled)
+				printf("\x1b[11;1HGyro SEL: kapali                       ");
+			else if (fuse)
+				printf("\x1b[11;1HGyro SEL: \x1b[32mAKTIF\x1b[0m (%d ornek)        ", gyro_samples());
+			else
+				printf("\x1b[11;1HGyro SEL: \x1b[33mogreniyor %2d/%d\x1b[0m konsolu cevir",
+					gyro_samples(), GYRO_MIN_SAMPLES);
 
 			draw_radar(tracker.locked, &tracker.face);
 
-			printf("\x1b[29;1HA merkezle  B sifirla  pad: elle kafa");
+			printf("\x1b[29;1HA merkez B sifirla SEL gyro pad: elle");
 			printf("\x1b[30;1HSTART cikis");
 			gfxFlushBuffers();
 
@@ -281,6 +346,7 @@ int main(void)
 		}
 	}
 
+	gyro_exit();
 	camera_close();
 	face_exit();
 	scene_exit();

@@ -11,12 +11,15 @@ gibi davranır: kafanı oynatınca kutunun içini farklı açılardan görürsü
    sonra sadece çevresinde aranır (hızlı); kaybolursa tüm görüntü taranır.
 3. Yüz kutusunun boyutu cetvel gibi kullanılarak kafanın ekrana göre konumu
    cm cinsinden hesaplanır, One-Euro filtresiyle titremesi alınır.
-4. Her göz için ekran kenarlarından geçen off-axis frustum ile stereo 3D
+4. Gyro füzyonu: konsol dönünce kafanın ekrana göre kayması gyro ile anında
+   uygulanır, kamera ölçümleri tahmini düzeltir. Gyro eksenlerinin ekrana
+   eşlemesi elle verilmez; kamera hareketiyle karşılaştırılarak öğrenilir
+   (konsolu birkaç saniye sağa sola / ileri geri çevirmek yeterli).
+5. Her göz için ekran kenarlarından geçen off-axis frustum ile stereo 3D
    sahne çizilir (citro3d).
 
 ## Yapılacaklar
 
-- [ ] Gyro füzyonu (kamera kareleri arasında anında tepki)
 - [ ] 3GX plugin denemesi
 
 ## .3dsx dosyasını alma (kurulum gerektirmez)
@@ -39,6 +42,7 @@ Her push'ta GitHub Actions uygulamayı derliyor.
 | X / Y | Yatay / dikey hareket yönünü ters çevir |
 | D-pad yukarı/aşağı | Hareket kazancını artır/azalt |
 | L / R | Yüz algılama eşiğini azalt/artır |
+| SELECT | Gyro füzyonunu aç/kapa |
 | Circle pad | Kafayı elle kaydır (takipsiz test) |
 | 3D slider | Stereo derinliği |
 | START | Çıkış |
