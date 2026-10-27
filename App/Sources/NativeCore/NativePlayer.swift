@@ -8,7 +8,7 @@ import Foundation
 /// Saat: `AVSampleBufferRenderSynchronizer` (ses varken ses donanımının saatine bağlı); Nit kareleri ve Referans
 /// katmanı aynı saati izler. Demux thread'i bloklamayan bir olay döngüsüdür: video, ses ve okuma sırayla ilerler;
 /// böylece dolu video kuyruğu sesi aç bırakmaz.
-/// M9 (S4): ham ses, renderer'a girmeden hemen önce `DialogStage`'den geçer. Ayar değişince renderer
+/// M9 (S4) ve M10 (S5): ham ses, renderer'a girmeden hemen önce `AudioStage`'den geçer. Ayar değişince renderer
 /// `flush(fromSourceTime:)` ile ~0,5 s ileriden kesilir ve son birkaç saniyenin ham sesinden yeniden işlenir;
 /// kesim ham örnek sınırına düştüğünden dikişsizdir. Arka planda video atılır, ses sürer (F1).
 final class NativePlayer: @unchecked Sendable {
@@ -41,7 +41,7 @@ final class NativePlayer: @unchecked Sendable {
     private var videoRenderer: AVSampleBufferVideoRenderer?
     private let audioRenderer: AVSampleBufferAudioRenderer
     private let audio: NativeAudioPipeline?
-    private let dialog: DialogStage?
+    private let stage: AudioStage?
 
     private let lock = NSLock()
     private var output: Output
@@ -51,8 +51,10 @@ final class NativePlayer: @unchecked Sendable {
     private var clockStarted = false
     private var loopEnabled = true
     private var audioStatusValue: NativeAudioStatus?
-    private var dialogSettings = DialogSettings()
-    private var dialogDirty = false
+    private var stageSettings = AudioStageSettings()
+    private var stageDirty = false
+    /// Etkin evreden geçişe (Atmos'a) dönüş isteği zamanı: 2 s beklenir, sürekli geçiş olmasın (§5.5).
+    private var passthroughRequestedAt: CFTimeInterval?
     private var backgroundRequested = false
     private var flushResult: (generation: Int, ok: Bool)?
     private var thread: Thread?
@@ -68,7 +70,8 @@ final class NativePlayer: @unchecked Sendable {
     /// Evreye verilmiş ham örnekler (son ~12 s): yeniden işleme bunlardan yapılır.
     private var audioHistory: [CMSampleBuffer] = []
     /// Renderer'a verilmiş örneklerin zaman aralıkları (yakın geçmiş): flush'ın kestiği sınırı bulmak için.
-    private var enqueuedSpans: [(pts: CMTime, end: CMTime)] = []
+    /// Renderer'a verilmiş örnekler (yakın geçmiş): flush'ın kestiği sınır ve çapraz geçiş için eski yolun çıktısı.
+    private var enqueuedSpans: [(pts: CMTime, end: CMTime, sample: CMSampleBuffer)] = []
     private var flushGeneration = 0
     private var flushWaiting: (generation: Int, time: CMTime, began: CFTimeInterval)?
     private var backgroundApplied = false
@@ -96,7 +99,10 @@ final class NativePlayer: @unchecked Sendable {
     private static let audioLead = 2.0
     private static let audioHardCap = 10.0
     /// Yeniden işlemede kesimin oynatma başının ne kadar önünde yapılacağı ve ısınma süresi (s).
-    private static let reprocessLead = 0.5
+    /// AU çalışıyorsa yeniden işleme ağırdır (≈ 0,5 s); yalnızca DSP ise ≤ 100 ms tepki hedeflenir (AS-37 d).
+    private static let reprocessLeadHeavy = 0.5
+    private static let reprocessLeadLight = 0.12
+    private static let crossfadeSeconds = 0.020
     private static let reprocessWarmup = 1.5
     private static let historySeconds = 12.0
 
@@ -121,14 +127,14 @@ final class NativePlayer: @unchecked Sendable {
         self.audioInfo = demuxer.audio
         self.audioOpenError = audioError
         self.audio = pipeline
-        self.dialog = pipeline != nil ? DialogStage() : nil
+        self.stage = pipeline != nil ? AudioStage() : nil
         self.audioStatusValue = pipeline?.status
         self.nitFormat = nitFormat
         self.referenceFormat = referenceFormat
         self.synchronizer = synchronizer
         self.audioRenderer = audioRenderer
         self.output = output
-        dialog?.onIsolationChange = { [weak self] in self?.markDialogDirty() }
+        stage?.onIsolationChange = { [weak self] in self?.markStageDirty() }
     }
 
     /// Referans katmanının oluşturucusu ana thread'de bağlanır; katman synchronizer'a eklidir.
@@ -199,32 +205,27 @@ final class NativePlayer: @unchecked Sendable {
     }
 
     /// M9 durumu (HUD, CSV); ses yoksa `nil`.
-    var dialogStatus: DialogStatus? { dialog?.status }
+    var audioStageStatus: AudioStageStatus? { stage?.status }
 
-    /// M9 ayarları. Demux thread'i, çalmakta olan sesi kesip yeniden işleyerek uygular (≈ 0,5 s içinde duyulur).
-    func setDialog(_ settings: DialogSettings) {
+    /// M10 göstergeleri: PTS'i oynatma noktasına kadar olan kayıtlar (o an duyulan sesle hizalı).
+    func takeAudioMeters() -> [AudioMeterRecord] {
+        stage?.takeMeters(until: mediaTime) ?? []
+    }
+
+    /// M9/M10 ayarları ve rota. Demux thread'i, çalmakta olan sesi kesip yeniden işleyerek uygular
+    /// (yalnızca DSP ise ≈ 0,12 s, AU varsa ≈ 0,5 s içinde duyulur).
+    func setAudioStage(_ settings: AudioStageSettings) {
         lock.lock()
-        if settings != dialogSettings {
-            dialogSettings = settings
-            dialogDirty = true
+        if settings != stageSettings {
+            stageSettings = settings
+            stageDirty = true
         }
         lock.unlock()
     }
 
-    /// Uygulama arka plana geçti/döndü: arka planda video atılır, diyalog F1'e geçer (çapraz geçişle);
-    /// dönüşte video o anki zamandan yeniden doldurulur, ses kesilmez.
-    func setBackground(_ value: Bool) {
+    private func markStageDirty() {
         lock.lock()
-        let changed = value != backgroundRequested
-        backgroundRequested = value
-        if changed, !value { pendingSeek = (mediaTime, true) }
-        lock.unlock()
-        if changed, !value { frames.cancel() }
-    }
-
-    private func markDialogDirty() {
-        lock.lock()
-        dialogDirty = true
+        stageDirty = true
         lock.unlock()
     }
 
@@ -286,7 +287,7 @@ final class NativePlayer: @unchecked Sendable {
             let referenceFormat = self.referenceFormat
             let playing = self.playing
             let background = backgroundRequested
-            let dialogChanged = dialogDirty
+            let stageChanged = stageDirty
             let flushDone = flushResult
             flushResult = nil
             lock.unlock()
@@ -297,15 +298,15 @@ final class NativePlayer: @unchecked Sendable {
             }
 
             var worked = false
-            if let dialog {
+            if let stage {
                 if background != backgroundApplied {
                     backgroundApplied = background
-                    dialog.setBackground(background)
+                    stage.setBackground(background)
                 }
                 if let done = flushDone, let waiting = flushWaiting, done.generation == waiting.generation {
                     finishReprocess(ok: done.ok, waiting: waiting)
                     worked = true
-                } else if dialogChanged, flushWaiting == nil {
+                } else if stageChanged, flushWaiting == nil, !holdPassthrough(stage) {
                     beginReprocess()
                 }
             }
@@ -323,7 +324,7 @@ final class NativePlayer: @unchecked Sendable {
                 if audioReady.isEmpty, !audioPending.isEmpty {
                     let raw = audioPending.removeFirst()
                     remember(raw)
-                    audioReady += dialog?.process(raw) ?? [raw]
+                    audioReady += stage?.process(raw) ?? [raw]
                     worked = true
                 }
                 if !audioReady.isEmpty {
@@ -339,9 +340,9 @@ final class NativePlayer: @unchecked Sendable {
                 }
                 worked = true
             }
-            if endOfFile, audioPending.isEmpty, audioReady.isEmpty, !drained, let dialog {
+            if endOfFile, audioPending.isEmpty, audioReady.isEmpty, !drained, let stage {
                 drained = true
-                audioReady += dialog.drain()
+                audioReady += stage.drain()
             }
             startClockIfReady(output: out, playing: playing, background: background)
 
@@ -501,16 +502,16 @@ final class NativePlayer: @unchecked Sendable {
             drained = false
             let time = CMTime(seconds: target, preferredTimescale: 90_000)
             audioFloor = time
-            if let dialog {
+            if let stage {
                 // Hedef öncesi ses (anahtar kareden hedefe) ısınma olarak işlenir, çıktısı atılır (§5.4).
                 flushGeneration += 1
                 flushWaiting = nil
+                passthroughRequestedAt = nil
                 lock.lock()
-                let settings = dialogSettings
-                dialogDirty = false
+                stageDirty = false
                 lock.unlock()
-                dialog.apply(settings)
-                dialog.reset(startAt: time, settleSeconds: Self.reprocessWarmup, forgetMusic: true)
+                stage.apply(effectiveStageSettings())
+                stage.reset(startAt: time, settleSeconds: Self.reprocessWarmup, seek: true)
                 audioSkipUntil = nil
             } else {
                 audioSkipUntil = time
@@ -531,7 +532,7 @@ final class NativePlayer: @unchecked Sendable {
         audioRenderer.enqueue(sample)
         let end = Self.end(of: sample)
         audioEnqueuedUntil = end
-        enqueuedSpans.append((CMSampleBufferGetPresentationTimeStamp(sample), end))
+        enqueuedSpans.append((CMSampleBufferGetPresentationTimeStamp(sample), end, sample))
         if enqueuedSpans.count > 512 {
             let horizon = CMTime(seconds: mediaTime - 2, preferredTimescale: 90_000)
             enqueuedSpans.removeAll { $0.end < horizon }
@@ -558,7 +559,9 @@ final class NativePlayer: @unchecked Sendable {
         let started = clockStarted
         lock.unlock()
         let now = started ? mediaTime : (clockStart ?? 0)
-        let time = CMTime(seconds: now + Self.reprocessLead, preferredTimescale: 90_000)
+        let heavy = usesIsolation(stage?.settings) || usesIsolation(effectiveStageSettings())
+        let lead = heavy ? Self.reprocessLeadHeavy : Self.reprocessLeadLight
+        let time = CMTime(seconds: now + lead, preferredTimescale: 90_000)
         flushGeneration += 1
         let generation = flushGeneration
         flushWaiting = (generation, time, CACurrentMediaTime())
@@ -577,30 +580,64 @@ final class NativePlayer: @unchecked Sendable {
         // örnek sınırı). Flush yapılamadıysa (zaman geçmiş) renderer'daki her şey çalar; devam onun sonundan.
         var resumeAt = audioEnqueuedUntil ?? waiting.time
         if ok, let first = enqueuedSpans.first(where: { $0.pts >= waiting.time }) { resumeAt = first.pts }
+        let flushed = ok ? enqueuedSpans.filter { $0.pts >= resumeAt }.map(\.sample) : []
         enqueuedSpans.removeAll { $0.pts >= resumeAt }
         if ok, let end = audioEnqueuedUntil, resumeAt < end { audioEnqueuedUntil = resumeAt }
         regenerate(from: resumeAt)
-        dialog?.noteReprocess(milliseconds: (CACurrentMediaTime() - waiting.began) * 1000)
+        // Eski yolun atılan çıktısı ile yeni yol 20 ms doğrusal geçişle birleşir: tıklama olmaz (AS-37 d).
+        NativeAudioPipeline.crossfade(&audioReady, old: flushed, start: resumeAt, seconds: Self.crossfadeSeconds)
+        stage?.noteReprocess(milliseconds: (CACurrentMediaTime() - waiting.began) * 1000)
     }
 
     /// Son ayarlarla, `resumeAt`'ten itibaren çalınacak sesi geçmişten yeniden üretir (öncesi ısınma).
     private func regenerate(from resumeAt: CMTime) {
-        guard let dialog else { return }
+        guard let stage else { return }
         lock.lock()
-        let settings = dialogSettings
-        dialogDirty = false
+        stageDirty = false
         lock.unlock()
-        dialog.apply(settings)
+        passthroughRequestedAt = nil
+        stage.apply(effectiveStageSettings())
         let warmStart = resumeAt - CMTime(seconds: Self.reprocessWarmup, preferredTimescale: 90_000)
         let firstUsed = audioHistory.firstIndex { Self.end(of: $0) > warmStart } ?? audioHistory.count
         let settle = audioHistory.indices.contains(firstUsed)
             ? max((resumeAt - CMSampleBufferGetPresentationTimeStamp(audioHistory[firstUsed])).seconds, 0) : 0
-        dialog.reset(startAt: resumeAt, settleSeconds: settle, forgetMusic: false)
+        stage.reset(startAt: resumeAt, settleSeconds: settle, seek: false)
         audioReady.removeAll()
         drained = false
         for raw in audioHistory[firstUsed...] {
-            audioReady += dialog.process(raw, warm: true)
+            audioReady += stage.process(raw, warm: true)
         }
+    }
+
+    /// "Atmos'u koru": Atmos içerikte boost %100'e kilitlenir (ses sıkıştırılmış kalır).
+    private func effectiveStageSettings() -> AudioStageSettings {
+        lock.lock()
+        var settings = stageSettings
+        let path = audioStatusValue?.path
+        lock.unlock()
+        if settings.boost.keepAtmos, path == .atmos { settings.boost.percent = 100 }
+        return settings
+    }
+
+    private func usesIsolation(_ settings: AudioStageSettings?) -> Bool {
+        guard let settings else { return false }
+        return settings.dialog.active && settings.dialog.engine != .dsp
+    }
+
+    /// Etkin evreden sıkıştırılmış Dolby geçişine dönüş 2 s bekletilir (kaydırıcı %100'e dönüp hemen
+    /// yeniden açılırsa Atmos ↔ PCM arasında gidip gelinmesin).
+    private func holdPassthrough(_ stage: AudioStage) -> Bool {
+        let path = audioStatus?.path
+        guard stage.settings.active, !effectiveStageSettings().active, path == .atmos || path == .dolby else {
+            passthroughRequestedAt = nil
+            return false
+        }
+        let now = CACurrentMediaTime()
+        guard let since = passthroughRequestedAt else {
+            passthroughRequestedAt = now
+            return true
+        }
+        return now - since < 2
     }
 
     private func checkAudioRenderer() {

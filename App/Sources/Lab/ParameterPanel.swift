@@ -1,3 +1,4 @@
+import AudioDSP
 import NitMath
 import SwiftUI
 
@@ -84,6 +85,26 @@ struct ParameterPanel: View {
                     .tint(DS.green)
                 Text("Otomatik: ön planda AUSoundIsolation, arka planda F1. AU: arka planda da AU (AS-15). Solo kör test içindir; loudness eşleme uygulanmaz.")
                     .font(.caption).foregroundStyle(DS.secondary)
+
+                group("Boost (M10)")
+                slider("Boost %", value: $model.params.boostPercent, range: 100...150, digits: 0)
+                Text("+\(TR.num(BoostConfig.gainDB(percent: model.params.boostPercent), 1)) dB · algısal eşleme, %150 = +6 dB (üst sınır)")
+                    .font(.caption).foregroundStyle(DS.secondary)
+                Picker("Limiter", selection: $model.params.limiterMode) {
+                    Text("Akıllı").tag(LimiterMode.smart)
+                    Text("Limiter").tag(LimiterMode.limiterOnly)
+                    Text("Kapalı").tag(LimiterMode.off)
+                    Text("Ham").tag(LimiterMode.rawFloat)
+                }
+                .pickerStyle(.segmented)
+                Text("Akıllı: yönetici + kompresör + −1 dBTP limiter. Limiter: yalnızca limiter. Kapalı: ±1,0 sert kırpma ve sayaç. Ham: kırpmasız float (yalnızca AS-37 g).")
+                    .font(.caption).foregroundStyle(DS.secondary)
+                Toggle("Agresif (L_max −7 LUFS)", isOn: $model.params.boostAggressive).font(.subheadline).tint(DS.green)
+                Toggle("Atmos'u koru (Atmos'ta boost %100)", isOn: $model.params.boostKeepAtmos).font(.subheadline).tint(DS.green)
+                Toggle("Hoparlörde 150 Hz HPF", isOn: $model.params.boostSpeakerHighPass).font(.subheadline).tint(DS.green)
+                Toggle("Renderer volume 1,5 (AS-37 g)", isOn: $model.params.rendererVolumeTest).font(.subheadline).tint(DS.green)
+                Button("Kırpma/GR göstergelerini sıfırla") { model.resetBoostMeters() }
+                    .font(.subheadline)
 
                 group("SDR gaması")
                 Picker("Gama", selection: $model.params.sdrGamma) {

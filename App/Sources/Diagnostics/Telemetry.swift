@@ -1,3 +1,4 @@
+import AudioDSP
 import Foundation
 
 /// Laboratuvar telemetrisi: döngüsel kayıt (son 3 saat, 2 Hz) ve CSV dışa aktarımı.
@@ -33,7 +34,10 @@ final class Telemetry {
         var rpuMicros: Double?
         var audioCPU: Double?
         /// M9 (S4): etkin motor, r, c, evre yükü, AU yükü ve gecikmeleri, Sound Analysis olasılıkları.
-        var dialog: DialogStatus?
+        /// M10 (S5): boost, limiter kipi, rota ve tavan; göstergeler oynatma saatine hizalı.
+        var audioStage: AudioStageStatus?
+        var boostMeters: BoostMeters?
+        var route: String
         var chromeVisible: Bool
         var panel: String
         var event: String
@@ -64,7 +68,9 @@ final class Telemetry {
         out += "t_s,zaman,H_cur,H_pot,H_s,H_eff,parlaklik,durum,mod,kaynak,isi,dusuk_guc,ekran_kaydi,"
         out += "gpu_p50_ms,gpu_p95_ms,dusen_kare,kadans,sapma_ms,cikis_maks,oynatiyor,L_ref,W_f,W_hat,A,W_hist,rpu_us,ses_cpu_yuzde,"
         out += "diyalog,diyalog_motor,diyalog_r,diyalog_c_db,diyalog_evre_cpu_yuzde,au_cpu_yuzde,au_duvar_yuzde,au_blok_maks_ms,"
-        out += "au_gecikme_ms,au_olculen_ms,sa_muzik,sa_sarki,sa_konusma,chromeVisible,panel,olay\n"
+        out += "au_gecikme_ms,au_olculen_ms,sa_muzik,sa_sarki,sa_konusma,"
+        out += "rota,boost_yuzde,limiter,tavan_dbtp,boost_hedef_db,boost_etkin_db,gr_db,gr_tepe_1s_db,gr_3db_ustu_oran,"
+        out += "kirpma_led,kirpma_toplam,kirpma_1s,en_buyuk_tepe_dbfs,tp_asim,chromeVisible,panel,olay\n"
         func f(_ v: Double, _ d: Int = 4) -> String { String(format: "%.\(d)f", v) }
         func q(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
         func o(_ v: Double?) -> String { v.map { f($0, 1) } ?? "" }
@@ -75,7 +81,8 @@ final class Telemetry {
                     r.playing ? "1" : "0", f(r.referenceWhite, 1), o(r.frameWhite), o(r.sceneWhite), o(r.anchor),
                     o(r.histogramWhite), o(r.rpuMicros), r.audioCPU.map { f($0, 2) } ?? ""]
                 .joined(separator: ",")
-            out += "," + Self.dialogColumns(r.dialog, f).joined(separator: ",")
+            out += "," + Self.dialogColumns(r.audioStage, f).joined(separator: ",")
+            out += "," + Self.boostColumns(r.audioStage, r.boostMeters, route: r.route, f).joined(separator: ",")
             out += "," + [r.chromeVisible ? "1" : "0", r.panel, q(r.event)].joined(separator: ",")
             out += "\n"
         }
@@ -86,12 +93,24 @@ final class Telemetry {
         return url
     }
 
-    private static func dialogColumns(_ d: DialogStatus?, _ f: (Double, Int) -> String) -> [String] {
-        guard let d, d.settings.active else { return ["0", "", "", "", "", "", "", "", "", "", "", "", ""] }
+    private static func dialogColumns(_ d: AudioStageStatus?, _ f: (Double, Int) -> String) -> [String] {
+        guard let d, d.settings.dialog.active else { return ["0", "", "", "", "", "", "", "", "", "", "", "", ""] }
         func o(_ v: Double?, _ digits: Int = 2) -> String { v.map { f($0, digits) } ?? "" }
         let au = d.isolation
-        return [d.settings.solo ? "solo" : String(d.settings.tier), "\"\(d.engine)\"", f(d.relaxation, 3), f(d.compensationDB, 2),
+        let dialog = d.settings.dialog
+        return [dialog.solo ? "solo" : String(dialog.tier), "\"\(d.engine)\"", f(d.relaxation, 3), f(d.compensationDB, 2),
                 o(d.stageCPUPercent), o(au?.cpuPercent), o(au?.wallPercent), o(au?.worstBlockMs, 3), o(au?.usedLatencyMs, 1),
                 o(au?.measuredLatencyMs, 1), o(d.music?.music, 3), o(d.music?.singing, 3), o(d.music?.speech, 3)]
+    }
+
+    private static func boostColumns(_ d: AudioStageStatus?, _ m: BoostMeters?, route: String,
+                                     _ f: (Double, Int) -> String) -> [String] {
+        func o(_ v: Double?, _ digits: Int = 2) -> String { v.map { f($0, digits) } ?? "" }
+        guard let d else { return [route] + [String](repeating: "", count: 13) }
+        let boost = d.settings.boost
+        return [route, f(boost.percent, 0), boost.mode.rawValue, f(d.ceilingDBTP, 1), f(boost.gainDB, 2), o(m?.appliedGainDB),
+                o(m?.gainReductionDB), o(m?.gainReductionPeakDB), o(m?.heavyReductionFraction, 4), m?.clipLit == true ? "1" : "0",
+                m.map { String($0.clipCount) } ?? "", m.map { String($0.clipsLastSecond) } ?? "", o(m?.maxPeakDBFS),
+                m.map { String($0.truePeakOvers) } ?? ""]
     }
 }

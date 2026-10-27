@@ -1,3 +1,4 @@
+import AudioDSP
 import Foundation
 import NitMath
 import SwiftUI
@@ -75,6 +76,10 @@ final class NitLabModel: ObservableObject {
     init() {
         engine.onSnapshot = { [weak self] snap in self?.snapshot = snap }
         engine.onStatusChange = { [weak self] status in self?.statusChanged(status) }
+        engine.onBoostRecall = { [weak self] value, route in
+            self?.params.boostPercent = value
+            self?.showToast("Rota \(route.rawValue): boost %\(Int(value.rounded())) (rota hafızası)")
+        }
         loadRecents()
         // Tonalite testinde seçilen gama varsayılan olur (K11).
         let savedGamma = UserDefaults.standard.double(forKey: Self.gammaKey)
@@ -134,6 +139,28 @@ final class NitLabModel: ObservableObject {
     func togglePlay() { engine.togglePlay() }
     func seek(to seconds: Double) { engine.seek(to: seconds) }
     func resetKnee() { engine.resetKnee() }
+
+    // MARK: M10 boost
+
+    /// Şeritteki Boost düğmesi %100 ile son boost değeri arasında geçer.
+    private var lastBoost = 150.0
+
+    var limiterEngaged: Bool { params.limiterMode == .smart || params.limiterMode == .limiterOnly }
+
+    func toggleBoost() {
+        if params.boostPercent > 100 {
+            lastBoost = params.boostPercent
+            params.boostPercent = 100
+        } else {
+            params.boostPercent = lastBoost
+        }
+    }
+
+    func toggleLimiter() {
+        params.limiterMode = limiterEngaged ? .off : .smart
+    }
+
+    func resetBoostMeters() { engine.resetBoostMeters() }
 
     func resetParams() {
         UserDefaults.standard.removeObject(forKey: Self.gammaKey)

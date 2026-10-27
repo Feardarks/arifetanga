@@ -241,7 +241,57 @@ final class NativeAudioPipeline {
         return Self.pcmSampleBuffer(samples, frames: count, format: format, pts: pts)
     }
 
-    /// float32 karışık PCM örneği (M9 evresi de kullanır).
+    /// float32 karışık PCM örneğinin örnekleri; başka biçimdeyse `nil`.
+    static func floatSamples(of sample: CMSampleBuffer) -> (samples: [Float], frames: Int, channels: Int)? {
+        guard let format = CMSampleBufferGetFormatDescription(sample),
+              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee,
+              asbd.mFormatID == kAudioFormatLinearPCM, asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0,
+              asbd.mBitsPerChannel == 32, asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved == 0,
+              let block = CMSampleBufferGetDataBuffer(sample) else { return nil }
+        let channels = Int(asbd.mChannelsPerFrame)
+        let frames = CMSampleBufferGetNumSamples(sample)
+        var samples = [Float](repeating: 0, count: frames * channels)
+        let status = samples.withUnsafeMutableBytes { bytes -> OSStatus in
+            guard let base = bytes.baseAddress else { return -1 }
+            return CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: min(bytes.count, CMBlockBufferGetDataLength(block)),
+                                              destination: base)
+        }
+        return status == kCMBlockBufferNoErr ? (samples, frames, channels) : nil
+    }
+
+    /// Yeniden işlemede eski (flush'la atılan) ve yeni yolun çıktılarını `start`'tan itibaren `seconds` boyunca
+    /// doğrusal çapraz geçişle birleştirir (§5.5: iki yol aynı sinyalden türediği için eşit güçlü değil doğrusal).
+    /// Örnekler ham örnek ızgarasına hizalı olduğundan aynı PTS'li eşler bulunur; biri sıkıştırılmışsa geçilir.
+    @discardableResult
+    static func crossfade(_ new: inout [CMSampleBuffer], old: [CMSampleBuffer], start: CMTime, seconds: Double) -> Int {
+        var mixed = 0
+        let end = start.seconds + seconds
+        for i in new.indices {
+            let pts = CMSampleBufferGetPresentationTimeStamp(new[i])
+            guard pts.seconds < end else { break }
+            guard let partner = old.first(where: { CMSampleBufferGetPresentationTimeStamp($0) == pts }),
+                  let a = floatSamples(of: partner), let b = floatSamples(of: new[i]),
+                  a.channels == b.channels, a.frames == b.frames,
+                  let format = CMSampleBufferGetFormatDescription(new[i]),
+                  let rate = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee.mSampleRate else { continue }
+            var out = b.samples
+            for f in 0..<b.frames {
+                let t = (pts.seconds + Double(f) / rate - start.seconds) / seconds
+                let w = Float(min(max(t, 0), 1))
+                for c in 0..<b.channels {
+                    let k = f * b.channels + c
+                    out[k] = a.samples[k] * (1 - w) + b.samples[k] * w
+                }
+            }
+            if let sample = pcmSampleBuffer(out, frames: b.frames, format: format, pts: pts) {
+                new[i] = sample
+                mixed += 1
+            }
+        }
+        return mixed
+    }
+
+    /// float32 karışık PCM örneği (ses evresi de kullanır).
     static func pcmSampleBuffer(_ samples: [Float], frames: Int, format: CMAudioFormatDescription, pts: CMTime) -> CMSampleBuffer? {
         let data = samples.withUnsafeBytes { Data($0) }
         guard let block = blockBuffer(data) else { return nil }

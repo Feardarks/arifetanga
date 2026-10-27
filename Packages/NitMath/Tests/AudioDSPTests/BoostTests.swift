@@ -56,7 +56,8 @@ final class BoostTests: XCTestCase {
         let x = (0..<400).map { Float(sin(2 * Double.pi * Double($0) / 4 + Double.pi / 4)) }
         XCTAssertEqual(x.map(abs).max()!, 0.7071, accuracy: 1e-3)
         XCTAssertEqual(truePeak(x, channels: 1), 0, accuracy: 0.2)
-        let low = (0..<4000).map { Float(0.5 * sin(2 * Double.pi * 1000 * Double($0) / 48000)) }
+        // Tam 100 periyot: sıfırda başlar ve biter (ani kesimin ara değer aşması ölçümü bozmasın).
+        let low = (0..<4800).map { Float(0.5 * sin(2 * Double.pi * 1000 * Double($0) / 48000)) }
         XCTAssertEqual(truePeak(low, channels: 1), 20 * log10(0.5), accuracy: 0.05)
     }
 

@@ -1,3 +1,4 @@
+import AudioDSP
 import Foundation
 import NitMath
 
@@ -106,6 +107,20 @@ struct NitParams: Equatable {
         DialogSettings(tier: dialogTier, engine: dialogEngine, solo: dialogSolo, highQuality: dialogHighQuality)
     }
 
+    /// M10 boost (S5): kaydırıcı %100–150, limiter kipi ve uzman seçenekleri.
+    var boostPercent = 100.0
+    var limiterMode: LimiterMode = .smart
+    var boostAggressive = false
+    var boostKeepAtmos = false
+    var boostSpeakerHighPass = true
+    /// AS-37 (g): renderer `volume = 1,5` denemesi (yalnızca bilgi; tasarım buna dayanmaz).
+    var rendererVolumeTest = false
+
+    var boostSettings: BoostSettings {
+        BoostSettings(percent: boostPercent, mode: limiterMode, aggressive: boostAggressive, keepAtmos: boostKeepAtmos,
+                      speakerHighPass: boostSpeakerHighPass)
+    }
+
     var curve: NitCurve {
         curveMode == .maximum ? NitCurve(w: maxW, kappa: maxKappa) : NitCurve(w: balancedW, kappa: balancedKappa)
     }
@@ -131,7 +146,62 @@ struct NitParams: Equatable {
             + "aralik_ms=\(peakIntervalMs); esik=\(peakThreshold); titresim=\(dither); b=\(ditherBits); "
             + "sdr_gama=\(sdrGamma); L_ref_kip=\(referenceWhiteMode.rawValue); L_ref_elle=\(referenceWhiteNits); "
             + "sapma_stop=\(sceneDeviationStops); kesim_esigi=\(cutThreshold); olcekleyici=\(highQualityScaler ? "kaliteli" : "bilineer"); "
-            + "motor=\(preferNativeEngine ? "kendi hattimiz" : "AVPlayer (MP4/MOV)"); \(dialogSettings.csv)"
+            + "motor=\(preferNativeEngine ? "kendi hattimiz" : "AVPlayer (MP4/MOV)"); \(dialogSettings.csv); \(boostSettings.csv)"
+            + (rendererVolumeTest ? "; renderer_volume_testi=1,5" : "")
+    }
+}
+
+/// M10 göstergeleri (AS-37). Ses evresinin PTS'li kayıtlarından, oynatma saatine hizalı toplanır (±20 ms).
+struct BoostMeters: Equatable {
+    private struct Entry: Equatable {
+        var pts: Double
+        var gainReduction: Double
+        var clips: Int
+    }
+
+    /// Şu anki kazanç azaltma (kompresör + limiter) ve son 1 s'nin tepesi (dB).
+    var gainReductionDB = 0.0
+    var gainReductionPeakDB = 0.0
+    /// Uygulanan boost (yönetici sonrası, dB).
+    var appliedGainDB: Double?
+    /// Kırpma LED'i: son kırpmadan sonra 500 ms yanar.
+    var clipLit = false
+    /// Kanal başına toplam kırpılan örnek (duyulan kısım; flush'la atılan sayılmaz).
+    var clipsTotal: [Int] = []
+    var clipsLastSecond = 0
+    /// Görülen en büyük örnek tepesi (kırpma öncesi, dBFS).
+    var maxPeakDBFS: Double?
+    var truePeakOvers = 0
+    /// Kazanç azaltmanın 3 dB'yi aştığı zamanın oranı (AS-37 a: ≤ %1).
+    var heavyReductionFraction: Double?
+
+    private var recent: [Entry] = []
+    private var lastClip: Double?
+    private var recordCount = 0
+    private var heavyCount = 0
+
+    var clipCount: Int { clipsTotal.reduce(0, +) }
+
+    mutating func ingest(_ records: [AudioMeterRecord], now: Double) {
+        for r in records {
+            let clips = r.clipped.reduce(0, +)
+            if clipsTotal.count < r.clipped.count { clipsTotal += [Int](repeating: 0, count: r.clipped.count - clipsTotal.count) }
+            for (c, n) in r.clipped.enumerated() { clipsTotal[c] += n }
+            if clips > 0 { lastClip = r.pts }
+            truePeakOvers += r.truePeakOvers
+            maxPeakDBFS = max(maxPeakDBFS ?? -120, r.peakDBFS)
+            appliedGainDB = r.appliedGainDB
+            gainReductionDB = r.gainReductionDB
+            recordCount += 1
+            if r.gainReductionDB > 3 { heavyCount += 1 }
+            recent.append(Entry(pts: r.pts, gainReduction: r.gainReductionDB, clips: clips))
+        }
+        recent.removeAll { $0.pts <= now - 1 }
+        if recent.isEmpty { gainReductionDB = 0 }
+        gainReductionPeakDB = recent.map(\.gainReduction).max() ?? 0
+        clipsLastSecond = recent.reduce(0) { $0 + $1.clips }
+        clipLit = lastClip.map { now - $0 <= 0.5 } ?? false
+        heavyReductionFraction = recordCount > 0 ? Double(heavyCount) / Double(recordCount) : nil
     }
 }
 
@@ -184,9 +254,11 @@ struct LabSnapshot {
     /// Ses hattı (S3): codec, düzen, yol (Atmos sıkıştırılmış / PCM) ve FFmpeg çözme yükü (AS-10).
     var audioSummary: String?
     var audioCPUPercent: Double?
-    /// M9 (S4): HUD satırları ve CSV için son durum.
-    var dialogLines: [String] = []
-    var dialog: DialogStatus?
+    /// M9 (S4) ve M10 (S5): HUD satırları ve CSV için son durum.
+    var audioStageLines: [String] = []
+    var audioStage: AudioStageStatus?
+    var boostMeters: BoostMeters?
+    var route: AudioRouteClass = .other
 
     /// P-2: çıkış hiçbir zaman sistemin o an verdiği headroom'u aşmaz.
     var p2OK: Bool { outputMax <= hCur + 1e-6 }

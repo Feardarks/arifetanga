@@ -1,3 +1,4 @@
+import AudioDSP
 import AVFoundation
 import NitMath
 import QuartzCore
@@ -31,6 +32,8 @@ final class LabEngine: NSObject {
 
     var onSnapshot: ((LabSnapshot) -> Void)?
     var onStatusChange: ((HeadroomStatus) -> Void)?
+    /// Rota değişince o rotanın hatırlanan boost değeri (kulaklığa geçince %100: güvenlik).
+    var onBoostRecall: ((Double, AudioRouteClass) -> Void)?
     var chromeVisible = true
     var panelName = "yok"
     var loop = true {
@@ -94,6 +97,10 @@ final class LabEngine: NSObject {
     private var loggedDialogEngine: String?
     private var loggedIsolationReport = false
     private var lifecycleObservers: [NSObjectProtocol] = []
+    /// M10 (S5): çıkış rotası ve oynatma saatine hizalı göstergeler.
+    private var route = AudioRouteClass.current
+    private var boostMeters = BoostMeters()
+    private var lastBoostEvent: CFTimeInterval = 0
     /// DV P5'in şekillendirme verisi okunamazsa Nit yerine Referans gösterilir (yanlış renk yerine).
     private var nativeForcedReference = false
     private static let nativeExtensions: Set<String> = ["mkv", "webm", "m2ts", "mts", "ts"]
@@ -145,7 +152,38 @@ final class LabEngine: NSObject {
             center.addObserver(forName: UIApplication.willEnterForegroundNotification, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.backgroundChanged(false) }
             },
+            center.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.routeChanged() }
+            },
         ]
+        snapshot.route = route
+    }
+
+    /// M9 + M10 ayarları ve rota (ses evresine).
+    private var stageSettings: AudioStageSettings {
+        AudioStageSettings(dialog: params.dialogSettings, boost: params.boostSettings, route: route)
+    }
+
+    private static func boostKey(_ route: AudioRouteClass) -> String { "boost.route." + route.rawValue }
+
+    /// AS-37 testleri arasında kırpma/GR sayaçlarını sıfırlar.
+    func resetBoostMeters() {
+        boostMeters = BoostMeters()
+        event("Boost göstergeleri sıfırlandı")
+    }
+
+    /// Rota değişti: tavan (BT −1,5 dBTP) ve hoparlör HPF'si yenilenir; boost o rotanın hatırlanan değerine döner (§5.5).
+    private func routeChanged() {
+        let newRoute = AudioRouteClass.current
+        guard newRoute != route else { return }
+        let old = route
+        route = newRoute
+        snapshot.route = newRoute
+        let stored = UserDefaults.standard.double(forKey: Self.boostKey(newRoute))
+        let recalled = stored >= 100 ? stored : 100
+        event("Rota: \(old.rawValue) → \(newRoute.rawValue) · tavan \(TR.num(newRoute.ceilingDBTP, 1)) dBTP · boost %\(Int(recalled.rounded())) (rota hafızası)")
+        native?.setAudioStage(stageSettings)
+        if abs(recalled - params.boostPercent) > 0.01 { onBoostRecall?(recalled, newRoute) }
     }
 
     private func backgroundChanged(_ background: Bool) {
@@ -422,9 +460,24 @@ final class LabEngine: NSObject {
             native?.setOutput(effectiveMode == .nit ? .nit : .reference)
         }
         telemetry.setParams(params.csvSummary)
+        if params.dialogSettings != old.dialogSettings || params.boostSettings != old.boostSettings {
+            native?.setAudioStage(stageSettings)
+        }
         if params.dialogSettings != old.dialogSettings {
-            native?.setDialog(params.dialogSettings)
             event("Diyalog: \(params.dialogSettings.label)" + (native == nil && params.dialogSettings.active ? " (yalnızca kendi hattımızda)" : ""))
+        }
+        if params.boostSettings != old.boostSettings {
+            UserDefaults.standard.set(params.boostPercent, forKey: Self.boostKey(route))
+            // Kaydırıcı sürüklenirken olaylar en fazla 2 Hz; kip değişimi hemen yazılır.
+            let now = CACurrentMediaTime()
+            if params.limiterMode != old.limiterMode || now - lastBoostEvent >= 0.5 {
+                lastBoostEvent = now
+                event("Boost: \(params.boostSettings.label)" + (native == nil && params.boostSettings.active ? " (yalnızca kendi hattımızda)" : ""))
+            }
+        }
+        if params.rendererVolumeTest != old.rendererVolumeTest {
+            audioRenderer.volume = params.rendererVolumeTest ? 1.5 : 1
+            event("AS-37 g: renderer volume ← \(params.rendererVolumeTest ? "1,5" : "1,0") · okunan \(TR.num(Double(audioRenderer.volume), 2))")
         }
         needsRender = true
         // Kaydırıcı sürüklenirken CSV'yi boğmamak için parametre olayları en fazla 2 Hz yazılır.
@@ -640,7 +693,7 @@ final class LabEngine: NSObject {
             snapshot.playing = isPlayingNow
             snapshot.recordingSeconds = telemetry.elapsed
             fillAudioSnapshot()
-            fillDialogSnapshot()
+            fillAudioStageSnapshot()
             fillSceneWhiteSnapshot()
             fillRpuSnapshot()
             onSnapshot?(snapshot)
@@ -716,7 +769,8 @@ final class LabEngine: NSObject {
         player.onLoop = { [weak self] in MainActor.assumeIsolated { self?.nativeLooped() } }
         player.onError = { [weak self] message in MainActor.assumeIsolated { self?.fail(message) } }
         player.setOutput(effectiveMode == .nit ? .nit : .reference)
-        player.setDialog(params.dialogSettings)
+        player.setAudioStage(stageSettings)
+        boostMeters = BoostMeters()
         player.setBackground(UIApplication.shared.applicationState == .background)
         loggedDialogEngine = nil
         loggedIsolationReport = false
@@ -767,30 +821,47 @@ final class LabEngine: NSObject {
         }
     }
 
-    /// M9 satırları (HUD) ve tek seferlik olaylar: motor değişimi, AS-12 raporu.
-    private func fillDialogSnapshot() {
-        guard let native, let status = native.dialogStatus else {
-            snapshot.dialog = nil
-            snapshot.dialogLines = params.dialogSettings.active ? ["Diyalog: yalnızca kendi hattımızda (MKV/M2TS ya da MP4 için kendi hattımız)"] : []
+    /// M9 ve M10 satırları (HUD), göstergeler ve tek seferlik olaylar: motor değişimi, AS-12 raporu.
+    private func fillAudioStageSnapshot() {
+        guard let native, let status = native.audioStageStatus else {
+            snapshot.audioStage = nil
+            snapshot.boostMeters = nil
+            snapshot.audioStageLines = params.dialogSettings.active || params.boostSettings.active
+                ? ["Diyalog ve boost yalnızca kendi hattımızda (MKV/M2TS ya da MP4 için kendi hattımız)"] : []
             return
         }
-        snapshot.dialog = status
+        snapshot.audioStage = status
+        boostMeters.ingest(native.takeAudioMeters(), now: native.mediaTime)
+        snapshot.boostMeters = status.settings.active ? boostMeters : nil
         guard status.settings.active else {
-            snapshot.dialogLines = []
+            var lines: [String] = []
+            if params.boostKeepAtmos, params.boostSettings.active, native.audioStatus?.path == .atmos {
+                lines.append("Atmos korunuyor: boost %100'e kilitli (Atmos'u koru)")
+            }
+            snapshot.audioStageLines = lines
             return
         }
         var lines: [String] = []
-        var head = "Diyalog \(status.settings.label) → \(status.engine)"
-        if let note = status.engineNote { head += " (\(note))" }
-        lines.append(head)
-        var mix = "gecikme \(TR.num(status.latencyMs, 0)) ms · r \(TR.num(status.relaxation)) · c \(TR.num(status.compensationDB, 1)) dB"
-        if let cpu = status.stageCPUPercent { mix += " · evre %\(TR.num(cpu, 1))" }
-        if let ms = status.lastReprocessMs { mix += " · yeniden işleme \(TR.num(ms, 0)) ms" }
-        lines.append(mix)
+        let dialog = status.settings.dialog
         if let layout = status.decodedLayout, let path = native.audioStatus?.path, path != .pcm {
-            lines.append("\(path == .atmos ? "Atmos" : "Dolby") → \(layout) yatak (diyalog için)")
+            let reason = dialog.active && status.settings.boost.active ? "diyalog ve boost" : dialog.active ? "diyalog" : "boost"
+            lines.append("\(path == .atmos ? "Atmos" : "Dolby") → \(layout) yatak (\(reason) için)")
         }
         if let error = status.decodeError { lines.append("Dolby çözülemedi, ses değişmeden geçiyor: \(error)") }
+        if dialog.active { lines += dialogLines(status) }
+        lines += boostLines(status)
+        var stage = "evre gecikmesi \(TR.num(status.latencyMs, 0)) ms"
+        if let cpu = status.stageCPUPercent { stage += " · yük %\(TR.num(cpu, 1))" }
+        if let ms = status.lastReprocessMs { stage += " · yeniden işleme \(TR.num(ms, 0)) ms" }
+        lines.append(stage)
+        snapshot.audioStageLines = lines
+    }
+
+    private func dialogLines(_ status: AudioStageStatus) -> [String] {
+        var lines: [String] = []
+        var head = "Diyalog \(status.settings.dialog.label) → \(status.engine)"
+        if let note = status.engineNote { head += " (\(note))" }
+        lines.append(head + " · r \(TR.num(status.relaxation)) · c \(TR.num(status.compensationDB, 1)) dB")
         if let au = status.isolation {
             lines.append("AU \(au.format)")
             var latency = "AU gecikme: bildirilen \(TR.num(au.declaredLatencyMs, 1)) · kullanılan \(TR.num(au.usedLatencyMs, 1)) ms"
@@ -824,12 +895,53 @@ final class LabEngine: NSObject {
         } else if let error = status.musicError {
             lines.append("SA: \(error)")
         }
-        snapshot.dialogLines = lines
         let engineKey = status.engine + (status.engineNote ?? "")
         if engineKey != loggedDialogEngine {
             loggedDialogEngine = engineKey
             event("Diyalog motoru: \(status.engine)" + (status.engineNote.map { " (\($0))" } ?? ""))
         }
+        return lines
+    }
+
+    /// M10: etkin kazanç dürüstçe; limiter kiplerinde GR, kapalıda kırpma LED'i ve sayaçlar (§5.5 göstergeler).
+    private func boostLines(_ status: AudioStageStatus) -> [String] {
+        let boost = status.settings.boost
+        let m = boostMeters
+        var lines: [String] = []
+        var head = "Boost %\(Int(boost.percent.rounded())) → hedef +\(TR.num(boost.gainDB, 1)) dB"
+        if let applied = m.appliedGainDB {
+            head += " · etkin +\(TR.num(max(applied, 0), 1)) dB"
+            if boost.mode == .smart, boost.active, applied < boost.gainDB - 1 { head += " (içerik zaten tavanda)" }
+        }
+        head += " · \(boost.mode.rawValue)" + (boost.aggressive ? " (Agresif)" : "")
+        lines.append(head)
+        switch boost.mode {
+        case .smart, .limiterOnly:
+            var text = "GR \(TR.num(m.gainReductionDB, 1)) dB · 1 s tepe \(TR.num(m.gainReductionPeakDB, 1)) dB · tavan \(TR.num(status.ceilingDBTP, 1)) dBTP"
+            if let heavy = m.heavyReductionFraction { text += " · GR>3 dB %\(TR.num(heavy * 100, 1))" }
+            if m.truePeakOvers > 0 { text += " · tavan aşımı \(m.truePeakOvers)" }
+            lines.append(text)
+        case .off, .rawFloat:
+            let led = m.clipLit ? "● KIRPMA" : "○ kırpma"
+            var text = "\(led) · toplam \(m.clipCount) (son 1 s \(m.clipsLastSecond))"
+            if m.clipsTotal.count > 1 { text += " · " + m.clipsTotal.map(String.init).joined(separator: "/") }
+            if let peak = m.maxPeakDBFS, peak > 0 { text += " · en büyük +\(TR.num(peak, 1)) dBFS" }
+            text += " · TP>0: \(m.truePeakOvers)"
+            if boost.mode == .rawFloat { text += " · ham float (kırpılmadı)" }
+            lines.append(text)
+        }
+        var notes: [String] = []
+        if status.highPassActive { notes.append("hoparlör HPF 150 Hz") }
+        if boost.active {
+            switch route {
+            case .headphones, .bluetooth: notes.append("iOS kulaklık güvenliği yüksek sesi sınırlayabilir")
+            case .usb: notes.append("Bit-perfect değil · Boost +\(TR.num(boost.gainDB, 1)) dB")
+            default: break
+            }
+        }
+        if params.rendererVolumeTest { notes.append("renderer volume \(TR.num(Double(audioRenderer.volume), 2)) (AS-37 g)") }
+        if !notes.isEmpty { lines.append("rota \(route.rawValue): " + notes.joined(separator: " · ")) }
+        return lines
     }
 
     /// P5 karesi kod çözüm parametreleri olmadan geldi. 2 sn içinde gelmezse Referans'a geçilir:
@@ -1040,7 +1152,7 @@ final class LabEngine: NSObject {
             jitterMs: snapshot.vsyncJitterMs, outputMax: snapshot.outputMax, playing: snapshot.playing,
             referenceWhite: snapshot.referenceWhite, frameWhite: snapshot.frameWhite, sceneWhite: snapshot.sceneWhite,
             anchor: snapshot.anchor, histogramWhite: snapshot.histogramWhite, rpuMicros: snapshot.rpuMeanMicros,
-            audioCPU: snapshot.audioCPUPercent, dialog: snapshot.dialog, chromeVisible: chromeVisible, panel: panelName,
-            event: event)
+            audioCPU: snapshot.audioCPUPercent, audioStage: snapshot.audioStage, boostMeters: snapshot.boostMeters,
+            route: route.rawValue, chromeVisible: chromeVisible, panel: panelName, event: event)
     }
 }
