@@ -47,7 +47,7 @@ final class DolbyAudioTests: XCTestCase {
         return bytes
     }
 
-    /// AC-3 5.1, 48 kHz, 448 kbps (frmsizecod 28 → 1792 bayt), bsid 8.
+    /// AC-3 5.1, 48 kHz, 384 kbps (frmsizecod 28 → 768 sözcük = 1536 bayt), bsid 8.
     private func ac3Frame() -> [UInt8] {
         var w = BitWriter()
         w.write(0x0B77, 16)
@@ -62,7 +62,7 @@ final class DolbyAudioTests: XCTestCase {
         w.write(1, 1)   // lfeon
         w.write(27, 5)  // dialnorm
         var bytes = [UInt8](w.bytes)
-        bytes += [UInt8](repeating: 0, count: 1792 - bytes.count)
+        bytes += [UInt8](repeating: 0, count: 1536 - bytes.count)
         return bytes
     }
 
@@ -99,7 +99,7 @@ final class DolbyAudioTests: XCTestCase {
     func testAC3AndDac3() throws {
         let f = try XCTUnwrap(DolbyAudioFrame.parse(ac3Frame()))
         XCTAssertFalse(f.isEAC3)
-        XCTAssertEqual(f.frameSize, 1792)
+        XCTAssertEqual(f.frameSize, 1536)
         XCTAssertEqual(f.bitRateCode, 14)
         XCTAssertEqual(f.channels, 6)
         XCTAssertEqual(f.dialogNormalization, -27)
