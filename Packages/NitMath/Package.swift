@@ -10,13 +10,17 @@ let package = Package(
         .library(name: "MediaFormat", targets: ["MediaFormat"]),
         // Saf Swift ses DSP'si (loudness, F1 merkez çıkarma, M9 diyalog çekirdeği); Linux'ta test edilir.
         .library(name: "AudioDSP", targets: ["AudioDSP"]),
+        // Saf Swift G/Ç yardımcıları (SMB/HTTP önden okuma tamponu); Linux'ta test edilir.
+        .library(name: "MediaIO", targets: ["MediaIO"]),
     ],
     targets: [
         .target(name: "NitMath"),
         .target(name: "MediaFormat"),
         .target(name: "AudioDSP"),
+        .target(name: "MediaIO"),
         .testTarget(name: "NitMathTests", dependencies: ["NitMath"]),
         .testTarget(name: "MediaFormatTests", dependencies: ["MediaFormat"]),
         .testTarget(name: "AudioDSPTests", dependencies: ["AudioDSP"]),
+        .testTarget(name: "MediaIOTests", dependencies: ["MediaIO"]),
     ]
 )
