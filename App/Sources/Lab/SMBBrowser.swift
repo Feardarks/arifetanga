@@ -146,8 +146,7 @@ final class SMBBrowserModel: ObservableObject {
     private static let serversKey = "smb.servers"
 
     /// Oynatılabilir uzantılar: kendi hattımızın açtığı video kapsayıcıları ve müzik dosyaları.
-    static let playableExtensions: Set<String> = ["mkv", "webm", "m2ts", "mts", "ts", "mp4", "m4v", "mov"]
-        .union(LabEngine.audioExtensions)
+    static let playableExtensions = LabEngine.audioExtensions.union(["mkv", "webm", "m2ts", "mts", "ts", "mp4", "m4v", "mov"])
 
     init() {
         if let data = UserDefaults.standard.data(forKey: Self.serversKey),
