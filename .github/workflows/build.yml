@@ -24,3 +24,36 @@ jobs:
           name: kafatakip
           path: kafatakip/kafatakip.3dsx
           if-no-files-found: error
+
+  plugin:
+    runs-on: ubuntu-latest
+    container: devkitpro/devkitarm:latest
+    defaults:
+      run:
+        working-directory: plugin
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: CTRPluginFramework ve 3gxtool kur
+        run: |
+          PAC=$(command -v dkp-pacman || command -v pacman)
+          CONF=/opt/devkitpro/pacman/etc/pacman.conf
+          [ -f "$CONF" ] || CONF=/etc/pacman.conf
+          if ! grep -Fxq "[thepixellizeross-lib]" "$CONF"; then
+            printf '\n[thepixellizeross-lib]\nServer = https://thepixellizeross.gitlab.io/packages/any\nSigLevel = Optional\n' >> "$CONF"
+          fi
+          if ! grep -Fxq "[thepixellizeross-linux]" "$CONF"; then
+            printf '\n[thepixellizeross-linux]\nServer = https://thepixellizeross.gitlab.io/packages/x86_64/linux\nSigLevel = Optional\n' >> "$CONF"
+          fi
+          "$PAC" -Sy --noconfirm libctrpf 3gxtool
+
+      - name: Derle
+        run: make
+
+      - name: .3gx dosyasini yukle
+        uses: actions/upload-artifact@v4
+        with:
+          name: kafatakip-plugin
+          path: plugin/KafaTakip.3gx
+          if-no-files-found: error

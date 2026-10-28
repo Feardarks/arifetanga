@@ -4,3 +4,4 @@ build/
 *.smdh
 *.map
 .DS_Store
+*.3gx

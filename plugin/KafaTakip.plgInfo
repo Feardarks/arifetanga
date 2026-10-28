@@ -1,0 +1,23 @@
+Author: arifetanga
+
+Version:
+    Major: 0
+    Minor: 1
+    Revision: 0
+
+Targets: # Uyumlu oyunlarin dusuk TitleID'leri (bos = tum oyunlar)
+
+Title: KafaTakip
+
+Summary: On kamerayla kafa takibi
+
+Description: |
+  Oyunun icinde on kamerayla kafayi takip eder.
+  Durum yazisi ust ekranin sol ustunde gorunur.
+  "Kafa -> circle pad" acikken kafani egerek circle pad'i kullanabilirsin.
+
+Compatibility: Console
+
+MemorySize: 5MiB
+
+UsePrivateMemory: false

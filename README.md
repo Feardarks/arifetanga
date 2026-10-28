@@ -18,9 +18,35 @@ gibi davranır: kafanı oynatınca kutunun içini farklı açılardan görürsü
 5. Her göz için ekran kenarlarından geçen off-axis frustum ile stereo 3D
    sahne çizilir (citro3d).
 
-## Yapılacaklar
+## Klasörler
 
-- [ ] 3GX plugin denemesi
+- `kafatakip/`: kafa takipli 3D demo uygulaması (.3dsx)
+- `plugin/`: aynı takibi oyunların içinde çalıştıran 3GX plugin'i
+- `common/`: ikisinin paylaştığı takip kodu (kamera, pico, takipçi, kafa konumu, filtre)
+
+## 3GX plugin (deneme)
+
+Oyunun içinde ön kamerayla kafayı takip eder ve durumu üst ekranın sol üst
+köşesine yazar. İstenirse kafa hareketini circle pad girdisine çevirir.
+
+Kurulum:
+1. Actions sayfasındaki **kafatakip-plugin** artifact'ından `KafaTakip.3gx`'i indir.
+2. Tüm oyunlar için SD kartta `/luma/plugins/default.3gx` olarak kaydet,
+   ya da tek bir oyun için `/luma/plugins/<TitleID>/KafaTakip.3gx`.
+3. Rosalina menüsünü aç (**L + Aşağı + SELECT**), **Plugin Loader: [Enabled]** yap.
+4. Oyunu başlat. Plugin menüsü oyun içinde **SELECT** ile açılır.
+
+Menü:
+- **Durum yazisi**: takip durumunu gösterir/gizler.
+- **Kafa -> circle pad**: kafayı eğince circle pad o yöne itilir (açıldığı andaki
+  konum merkez olur). HID belleğine yazıldığı için bazı oyunlarda etkisiz ya da
+  titrek olabilir.
+- **Merkezle**: şu anki kafa konumunu merkez yapar.
+
+Notlar: Takip oyunla aynı çekirdekte en düşük öncelikte çalışır; ağır oyunlarda
+kamera FPS'i düşer. Kamerayı kendisi kullanan oyunlarda (AR oyunları) kamera
+açılamaz. Plugin 5 MiB bellek ister; genişletilmiş bellek kullanan oyunlarda
+yüklenmeyebilir.
 
 ## .3dsx dosyasını alma (kurulum gerektirmez)
 
@@ -52,7 +78,7 @@ Alt ekranda takip durumu, kamera/çizim FPS'i, algılama süresi, kafa konumu
 
 ## Ayarlanabilir varsayımlar
 
-- `source/head.c`: kamera görüş açısı (60°), yüz genişliği (15 cm), kameranın
+- `common/head.c`: kamera görüş açısı (60°), yüz genişliği (15 cm), kameranın
   ekran merkezinden yüksekliği (3 cm). Alt ekrandaki Z (uzaklık) gerçek
   uzaklıktan farklıysa görüş açısı düzeltilir.
 - `source/scene.h`: ekran boyutu (Old 3DS 7.7 x 4.6 cm; XL için ~10.6 x 6.4).
@@ -72,5 +98,8 @@ Alt ekranda takip durumu, kamera/çizim FPS'i, algılama süresi, kafa konumu
 ## Üçüncü parti
 
 - [pico](https://github.com/nenadmarkus/pico) (MIT, Nenad Markuš):
-  `source/picornt.c`, `source/picornt.h` ve `data/facefinder.bin` yüz kaskadı,
-  commit `7d550c7`. Lisans: `source/picornt.LICENSE`.
+  `common/picornt.c`, `common/picornt.h` ve `common/data/facefinder.bin` yüz kaskadı,
+  commit `7d550c7`. Lisans: `common/picornt.LICENSE`.
+- [CTRPluginFramework](https://gitlab.com/thepixellizeross/ctrpluginframework)
+  (The Pixellizer Group lisansı): `plugin/3gx.ld` bağlayıcı betiği TestPlugin'den,
+  commit `96fd3d9`.
