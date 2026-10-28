@@ -18,7 +18,7 @@ TARGET		:=	KafaTakip
 BUILD		:=	build
 SOURCES		:=	Sources ../common
 DATA		:=	../common/data
-INCLUDES	:=	Sources ../common
+INCLUDES	:=	Includes Sources ../common
 PSF		:=	$(TARGET).plgInfo
 
 #---------------------------------------------------------------------------------

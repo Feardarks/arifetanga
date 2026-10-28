@@ -48,8 +48,6 @@ jobs:
           printf '\n[thepixellizeross-linux]\nServer = https://thepixellizeross.gitlab.io/packages/x86_64/linux\nSigLevel = Optional\n' >> /tmp/ctrpf-pacman.conf
           grep -n '^\[' /tmp/ctrpf-pacman.conf
           "$PAC" --config /tmp/ctrpf-pacman.conf -Sy --noconfirm --needed libctrpf 3gxtool
-          echo "DEVKITPRO=$DEVKITPRO"
-          "$PAC" --config /tmp/ctrpf-pacman.conf -Ql libctrpf | grep -E 'types\.h|csvc\.h|plgldr\.h|include/[^/]+/?$' | head -40
 
       - name: Derle
         run: make
