@@ -1,6 +1,6 @@
 # Nit Laboratuvarı: kurulum ve test rehberi
 
-**Sürüm 0.10.0 (S0 + S0b + S2 + S3 + S4 + S5 + S6).** Amaç, ürünün 1 numaralı vaadini cihazda ölçmek: iPhone 11 Pro + iOS 27, SDR'da da HDR'da da beyazı panel tepesine (≈ 1200 nit) çıkarabiliyor mu ve bunu film boyunca sürdürebiliyor mu? (02-cozum §10.1)
+**Sürüm 0.11.0 (S0 + S0b + S2 + S3 + S4 + S5 + S6 + S7).** Amaç, ürünün 1 numaralı vaadini cihazda ölçmek: iPhone 11 Pro + iOS 27, SDR'da da HDR'da da beyazı panel tepesine (≈ 1200 nit) çıkarabiliyor mu ve bunu film boyunca sürdürebiliyor mu? (02-cozum §10.1)
 
 ## 1. Kurulum
 
@@ -62,6 +62,8 @@ Dolby Vision profilini görmek için: `ffprobe -v error -show_streams -select_st
 
 Dosyaları iPhone'a **Dosyalar** uygulaması (iCloud Drive, "iPhone'umda" ya da SMB) üzerinden koy. Laboratuvarda **Dosya → Dosyalar'dan aç…** ile seç.
 
+**v0.11'den itibaren NAS'tan doğrudan oynatma (S7):** **Dosya → SMB sunucuları…** Ağdaki sunucular (Bonjour) listelenir; Windows paylaşımları listede çıkmaz, **Sunucu ekle…** ile adresi yaz. İlk açılışta iOS **yerel ağ izni** sorar: **İzin ver**. İzin penceresi açıkken yapılan ilk bağlantı başarısız olabilir; bir kez daha dokun. Parola Keychain'de saklanır. Paylaşım → klasör → dosyaya dokununca oynar; son açılanlarda "SMB · ad" olarak kalır.
+
 ## 3. Ekran
 
 - **HUD (sol üst):**
@@ -78,6 +80,7 @@ Dosyaları iPhone'a **Dosyalar** uygulaması (iCloud Drive, "iPhone'umda" ya da 
   - **Tepe Kilidi**, **Titreşim**
   - **Parametreler**, **CSV paylaş**, **HUD küçült**, **Kapat**
 - **Videoya dokunmak** şeridi gizler ya da gösterir.
+- **Ağ satırları (v0.11):** `Ağ: SMB · NAS/Filmler · tampon 48 MB (6,1 sn) · 52,3 MB/s`, `Ağ: bekleme … · hata … · yeniden bağlanma … · kurtarma … · takılma …` ve `Zamanlama: bağlanma … · açılış … · sarma … ms (en çok …, n kez)`. Yerel dosyada yalnızca zamanlama satırı çıkar.
 - **Kayıt:** Laboratuvar açık olduğu sürece telemetri 2 Hz'de kaydedilir. **CSV paylaş** ile dışa aktarılır.
 
 ## 4. Test protokolü (sırayla)
@@ -112,11 +115,16 @@ Dosyaları iPhone'a **Dosyalar** uygulaması (iCloud Drive, "iPhone'umda" ya da 
 | T27 | **USB DAC'ta doğru hız (AS-11)** | USB DAC'ı Lightning–USB 3 Kamera Adaptörü ile bağla (DAC 100 mA'den fazla çekiyorsa adaptörü şarja tak). Altı test dosyası üret: `for r in 44100 48000 88200 96000 176400 192000; do ffmpeg -f lavfi -i "aevalsrc=0.5*sin(2*PI*1000*t)\|0.5*sin(2*PI*1500*t):s=$r:d=20" -c:a flac -sample_fmt s32 -bits_per_raw_sample 24 hiz-$r.flac; done`. Dosyalar uygulamasıyla Arifetanga klasörüne at, sırayla aç. Parametreler → Bit-perfect → Oturum **Otomatik**. | DAC'ın ekranında/ışığında **dosyanın hızı** görünmeli. HUD: `… → USB DAC «ad» 96 kHz` ve `istenen 96 kHz → donanım 96 kHz`. Desteklenmeyen hızda HUD `hız uyuşmazlığı` yazar; iPhone'un çıkabildiği en yüksek hızı not et. Hız değişirken kısa bir boşluk normaldir. |
 | T28 | **Uygulama içi bit doğrulaması (FLAC MD5)** | Kendi müzik arşivinden 16/44,1 ve 24/96 FLAC'ları (ya da T27 dosyalarını) **baştan sona, sarmadan** çal (Döngü kapalı). Sonra Parametreler'de "Kayıpsızda tamsayı PCM"i kapat, dosyayı yeniden aç. | Dosya sonunda yeşil `FLAC MD5 ✓ STREAMINFO ile birebir`: çözülen PCM kaynakla aynı ve renderer'a bu değerler gidiyor. Sarınca `geçersiz` yazması normaldir. Satır: `Ses: FLAC … → PCM s32 · 24 bit`; tamsayı kapalıyken `float32` ve `float32 çıkış (≤ 24 bit kayıpsız)` uyarısı. |
 | T29 | **Loopback bit eşitliği (AS-11)** | Dijital çıkışlı (S/PDIF koaksiyel/optik) bir DAC gerekir: çıkışı bilgisayardaki bir kayıt cihazına bağla, kaydı **dosyanın hızında ve 24 bit** al. Bir FLAC'ı çal, kaydı WAV olarak kaydet; bilgisayarda `python3 tools/bit-perfect-karsilastir.py kaynak.flac kayit.wav` çalıştır (ffmpeg gerekir). Sonra bozma koşullarını dene: Boost'u aç, Diyalog'u aç, iPhone ses seviyesini %50 yap. Dijital çıkış yoksa HDCD ışıklı bir DAC'ta HDCD kodlu bir CD kopyası (16/44,1 FLAC) çal. | Normal yolda `SONUÇ: BİT-PERFECT ✓` ve HUD'da yeşil `Bit-perfect ✓`. Boost/Diyalog açıkken betik `DEĞİL ✗` vermeli, HUD da nedenini yazmalı. **%50 ses seviyesinde** sonuç: DAC'ın donanım seviyesi varsa ✓ kalır, yoksa ✗ (§5.6'daki açık soru). HDCD ışığı yalnızca bit-perfect yolda yanar. |
+| T30 | **SMB hızı: libsmb2 ve Dosyalar (AS-23)** | Telefon ve NAS aynı ağda; telefon yönlendiriciyle aynı odada. **SMB sunucuları…** → sunucu → paylaşım → büyük bir dosya (4K remux, ≥ 20 GB). Dosyayı **sola kaydır → Hız testi**: libsmb2 önce 8 istekle, sonra tek istekle ölçülür (≈ 20 s). Sonra **Dosyalar** uygulamasında aynı sunucuya bağlan (Gözat → … → **Sunucuya Bağlan**, `smb://NAS-adresi`); SMB sayfasında **Dosyalar yolu: dosya seç…** ile **aynı dosyayı** seç. Testi bir de iki duvar ötede tekrarla. | Her satır: `MB/s · ilk okuma · rastgele 1 MB ort/en çok`. **libsmb2 8 istek ≥ 20 MB/s** hedef (yeşil). Tek istek ve Dosyalar ile farkı yaz. Ekran fotoğrafı al; CSV'de "Hız testi (AS-23)" olayları var. Wi-Fi standardını (5/6) ve yönlendiriciye uzaklığı not et. |
+| T31 | **SMB'den 4K remux, 2 saat (AS-3)** | NAS'taki 4K HDR remux'u (TrueHD/Atmos sesli, ≥ 60 Mb/s) SMB'den aç, Nit kipi, **Döngü açık**, en az **2 saat** dokunmadan oynat (şarja takılı olabilir). Bitince CSV'yi paylaş. Sonra kısa bir **kesinti denemesi**: oynarken yönlendiricinin Wi-Fi'ını 10 s kapatıp aç (ya da telefonu 5 s uçak kipine al). | HUD `Ağ:` satırları: tampon çoğu zaman ≈ 48 MB, **takılma 0**, kurtarma 0, MB/s değeri bit hızının üstünde. Bekleme sayısı açılış ve döngü başında artabilir; oynarken artmamalı. Takılma olursa olay günlüğünde `Takılma #n @ zaman · tampon …` yazar; zamanı ve o an telefonun nerede olduğunu not et. Kesintide: görüntü durabilir ama **film baştan başlamamalı**; Wi-Fi gelince `yeniden bağlanma`/`kurtarma` artar ve oynatma kaldığı yerden sürer. |
+| T32 | **Sarma süresi (AS-3: < 1,5 s)** | T31'deki SMB dosyasında oynatma çubuğuyla **10 kez** uzak yerlere (ileri ve geri) sar; aralarda 5 s bekle. Aynısını aynı dosyanın yerel kopyasıyla (ya da Dosyalar SMB yoluyla) tekrarla. Son olarak Parametreler → Ağ'daki **önden okuma** anahtarını kapatıp Dosyalar SMB yolunda 3 sarma daha yap. | `Zamanlama: … sarma X ms (en çok Y, n kez)`: **her sarma < 1500 ms** hedef; aşan olursa olayda `(hedef < 1,5 s aşıldı)` yazar. SMB ile yerel arasındaki farkı ve önden okuma kapalıyken Dosyalar yolunun davranışını yaz. |
 | T9 | **Dayanıklılık (K8, AS-28)** | HDR10 dosyası, Döngü açık, 2 saat. Üç ayrı çalıştırma: Nit + Tepe Kilidi, Nit (kilit kapalı), Referans. Şarjda değil, oda sıcaklığında. | CSV'yi paylaş. Headroom çöküşü olup olmadığını, ısıyı ve pil yüzdesini (başta ve sonda) not et. |
 
 Her testten sonra CSV'yi paylaşıp (AirDrop, Dosyalar ya da e-posta) bana gönderebilirsin. Raporu (`τ_up`, `w`/`κ`, γ, titreşim ve Tepe Kilidi varsayılanları) bu verilerden çıkaracağım.
 
-## 5. Bilinen sınırlar (v0.10)
+## 5. Bilinen sınırlar (v0.11)
+
+- SMB (S7): yalnızca NTLM kimlik doğrulaması (Kerberos/Active Directory yok) ve SMB2/3 (SMB1 yok). Bonjour'da yalnızca `_smb._tcp` yayınlayan sunucular görünür (Synology, QNAP, macOS paylaşımı); Windows için adres elle yazılır. IPv6 adresleri denenmedi. Takılma sayacı yalnızca Nit yolunda çalışır (Referans'ta kareler uygulamaya gelmez). Jellyfin ve Plex henüz yok.
 
 - Ses: dosyanın varsayılan izi çalınır; iz seçimi ve gece modu sonraki adımlarda. TrueHD Atmos ve DTS:X'in nesneleri çözülmez; 7.1 yatak çalınır (konseptte bilinçli olarak elendi). Altyazı ve PiP yok.
 - Bluetooth gecikmesi henüz telafi edilmiyor (AS-22, S8).
