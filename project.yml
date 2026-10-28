@@ -39,10 +39,16 @@ targets:
       # S4: ses DSP'si (F1 merkez çıkarma, M9 diyalog çekirdeği, yeniden örnekleme).
       - package: NitMath
         product: AudioDSP
+      # S7: önden okuma tamponu (ağ kaynakları).
+      - package: NitMath
+        product: MediaIO
       # S2: native bağımlılıklar (ThirdParty/build-all.sh; CI'da önbellekten). Statik, gömülmez.
       - framework: ThirdParty/build/FFmpeg.xcframework
         embed: false
       - framework: ThirdParty/build/Dovi.xcframework
+        embed: false
+      # S7: libsmb2 (SMB2/3; LGPL, statik — kişisel sideload; dağıtımda dinamik framework'e geçilir, §8.5).
+      - framework: ThirdParty/build/Smb2.xcframework
         embed: false
       - sdk: libz.tbd
     info:
@@ -63,6 +69,10 @@ targets:
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         ITSAppUsesNonExemptEncryption: false
+        # S7: SMB sunucularına bağlanma ve Bonjour ile bulma (yerel ağ izni).
+        NSLocalNetworkUsageDescription: Ev ağındaki SMB sunucularını (NAS) bulmak ve oradaki filmleri oynatmak için.
+        NSBonjourServices:
+          - _smb._tcp
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: $(ARIF_BUNDLE_ID)

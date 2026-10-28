@@ -136,6 +136,12 @@ final class ReadAheadStreamTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(stream.stats.errors, 1)
         stream.seek(to: 3 << 20)
         XCTAssertEqual(buffer.withUnsafeMutableBytes { stream.read(into: $0) }, 64, "başka yere sarınca sürer")
+        // Ağ geri geldi: aynı yere dönüp yeniden denenince okunur.
+        source.fail(at: 100, false)
+        stream.seek(to: 0)
+        stream.retry()
+        XCTAssertEqual(buffer.withUnsafeMutableBytes { stream.read(into: $0) }, 64, "yeniden deneme")
+        XCTAssertEqual(buffer[63], FakeSource.byte(at: 63))
 
         let flaky = FakeSource(size: 2 << 20, latency: 0)
         flaky.fail(at: 10, true)
@@ -144,5 +150,32 @@ final class ReadAheadStreamTests: XCTestCase {
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.3) { flaky.fail(at: 10, false) }
         XCTAssertEqual(buffer.withUnsafeMutableBytes { recovering.read(into: $0) }, 64, "kesinti geçince okunur")
         XCTAssertEqual(buffer[10], FakeSource.byte(at: 10))
+    }
+}
+
+final class FileRangeSourceTests: XCTestCase {
+    func testReadsFileThroughStream() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("mediaio-\(UUID().uuidString).bin")
+        let bytes = (0..<3_000_001).map { FakeSource.byte(at: Int64($0)) }
+        try Data(bytes).write(to: url)
+        defer { try? FileManager.default.removeItem(at: url) }
+        let source = try FileRangeSource(path: url.path)
+        XCTAssertEqual(source.size, 3_000_001)
+        let stream = ReadAheadStream(source: source, chunkSize: 1 << 20, aheadLimit: 2 << 20)
+        defer { stream.close() }
+        stream.seek(to: 2_999_990)
+        var tail = [UInt8](repeating: 0, count: 64)
+        XCTAssertEqual(tail.withUnsafeMutableBytes { stream.read(into: $0) }, 11)
+        XCTAssertEqual(Array(tail[0..<11]), Array(bytes[2_999_990...]))
+        stream.seek(to: 0)
+        var all: [UInt8] = []
+        var buffer = [UInt8](repeating: 0, count: 70_000)
+        while true {
+            let n = buffer.withUnsafeMutableBytes { stream.read(into: $0) }
+            if n <= 0 { break }
+            all += buffer[0..<n]
+        }
+        XCTAssertEqual(all, bytes)
+        XCTAssertThrowsError(try FileRangeSource(path: url.path + ".yok"))
     }
 }

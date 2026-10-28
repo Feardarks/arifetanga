@@ -115,6 +115,12 @@ struct ParameterPanel: View {
                 Text("Otomatik: müzik dosyası ya da USB DAC'ta Müzik (.default), filmde Film (.moviePlayback). Dosya açılırken oturum dosyanın örnekleme hızını ister; HUD donanımın gerçekten geçip geçmediğini gösterir.")
                     .font(.caption).foregroundStyle(DS.secondary)
 
+                group("Ağ (S7, AS-3/AS-23)")
+                Toggle("Dosyalar'ın ağ/harici konumlarında önden okuma (sonraki açılışta)", isOn: $model.params.filesReadAhead)
+                    .font(.subheadline).tint(DS.green)
+                Text("Açıkken Dosyalar'ın SMB ya da USB konumundaki dosya 48 MB önden okuma tamponuyla açılır (libsmb2 yoluyla aynı ölçümler). Kapalıyken FFmpeg dosyayı doğrudan okur.")
+                    .font(.caption).foregroundStyle(DS.secondary)
+
                 group("SDR gaması")
                 Picker("Gama", selection: $model.params.sdrGamma) {
                     Text("2,2").tag(2.2)

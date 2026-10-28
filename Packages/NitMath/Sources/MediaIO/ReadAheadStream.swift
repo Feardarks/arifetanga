@@ -7,6 +7,12 @@ public protocol RangeSource: AnyObject {
     var size: Int64 { get }
     /// `offset`'ten en çok `buffer.count` bayt okur ve okunan bayt sayısını döndürür (0: dosya sonu).
     func read(into buffer: UnsafeMutableRawBufferPointer, at offset: Int64) throws -> Int
+    /// Bağlantının yeniden kurulma sayısı (SMB); başka thread'den okunabilmelidir.
+    var reconnectCount: Int { get }
+}
+
+public extension RangeSource {
+    var reconnectCount: Int { 0 }
 }
 
 /// Önden okuma tamponunun ölçümleri (HUD, CSV; AS-3, AS-23).
@@ -22,6 +28,7 @@ public struct ReadAheadStats: Equatable, Sendable {
     public var longestWait = 0.0
     public var errors = 0
     public var lastError: String?
+    public var reconnects = 0
 }
 
 /// Aralıklı kaynağın önünde, ayrı bir thread'in doldurduğu parça önbelleği (02-cozum §7.4: önden okuma).
@@ -73,6 +80,7 @@ public final class ReadAheadStream: @unchecked Sendable {
         defer { condition.unlock() }
         var s = statsValue
         s.bufferedAhead = contiguousAhead()
+        s.reconnects = source.reconnectCount
         return s
     }
 
@@ -116,6 +124,14 @@ public final class ReadAheadStream: @unchecked Sendable {
         condition.lock()
         position = min(max(offset, 0), size)
         if let failed = failedChunk, failed != position / Int64(chunkSize) { failedChunk = nil }
+        condition.broadcast()
+        condition.unlock()
+    }
+
+    /// Kalıcı hata vermiş parçayı yeniden dener (oynatıcının kurtarma denemesi; ağ geri gelmiş olabilir).
+    public func retry() {
+        condition.lock()
+        failedChunk = nil
         condition.broadcast()
         condition.unlock()
     }

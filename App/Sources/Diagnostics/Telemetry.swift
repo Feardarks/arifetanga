@@ -1,5 +1,6 @@
 import AudioDSP
 import Foundation
+import MediaIO
 
 /// Laboratuvar telemetrisi: döngüsel kayıt (son 3 saat, 2 Hz) ve CSV dışa aktarımı.
 /// Kolonlar 02-cozum §10.1 HUD alanları + 03-tasarim G-20 (`chromeVisible`, `panel`).
@@ -40,6 +41,8 @@ final class Telemetry {
         var route: String
         /// S6: sinyal yolu, bit-perfect ve FLAC MD5.
         var signalPath: SignalPathStatus?
+        /// S7: ağ tamponu, hız, beklemeler, yeniden bağlanma, sarma/açılış süreleri ve takılmalar.
+        var network: NetworkStatus?
         var chromeVisible: Bool
         var panel: String
         var event: String
@@ -73,7 +76,10 @@ final class Telemetry {
         out += "au_gecikme_ms,au_olculen_ms,sa_muzik,sa_sarki,sa_konusma,"
         out += "rota,boost_yuzde,limiter,tavan_dbtp,boost_hedef_db,boost_etkin_db,gr_db,gr_tepe_1s_db,gr_3db_ustu_oran,"
         out += "kirpma_led,kirpma_toplam,kirpma_1s,en_buyuk_tepe_dbfs,tp_asim,"
-        out += "dosya_hz,donanim_hz,bit_perfect,bp_neden,flac_md5,chromeVisible,panel,olay\n"
+        out += "dosya_hz,donanim_hz,bit_perfect,bp_neden,flac_md5,"
+        out += "ag_kaynak,ag_tampon_mb,ag_tampon_sn,ag_mbps,ag_bekleme,ag_bekleme_sn,ag_en_uzun_bekleme_sn,ag_hata,"
+        out += "ag_yeniden_baglanti,ag_kurtarma,baglanma_ms,acilis_ms,sarma_ms,sarma_maks_ms,sarma_sayisi,takilma,takilma_sn,"
+        out += "chromeVisible,panel,olay\n"
         func f(_ v: Double, _ d: Int = 4) -> String { String(format: "%.\(d)f", v) }
         func q(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
         func o(_ v: Double?) -> String { v.map { f($0, 1) } ?? "" }
@@ -90,6 +96,7 @@ final class Telemetry {
             out += "," + [path.map { String($0.fileRate) } ?? "", path.map { f($0.hardwareRate, 0) } ?? "",
                           path?.bitPerfect.map { $0 ? "1" : "0" } ?? "", q(path?.reasons.joined(separator: "; ") ?? ""),
                           q(path?.md5 ?? "")].joined(separator: ",")
+            out += "," + Self.networkColumns(r.network, f).joined(separator: ",")
             out += "," + [r.chromeVisible ? "1" : "0", r.panel, q(r.event)].joined(separator: ",")
             out += "\n"
         }
@@ -98,6 +105,17 @@ final class Telemetry {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("nit-lab-\(stamp.string(from: Date())).csv")
         try out.write(to: url, atomically: true, encoding: .utf8)
         return url
+    }
+
+    private static func networkColumns(_ n: NetworkStatus?, _ f: (Double, Int) -> String) -> [String] {
+        guard let n else { return [String](repeating: "", count: 17) }
+        func o(_ v: Double?, _ digits: Int = 1) -> String { v.map { f($0, digits) } ?? "" }
+        let s = n.stats
+        return ["\"\(n.kind)\"", o(s.map { Double($0.bufferedAhead) / 1_000_000 }), o(n.bufferSeconds, 2),
+                o(s?.throughputMBps), s.map { String($0.waits) } ?? "", o(s?.waitSeconds, 3), o(s?.longestWait, 3),
+                s.map { String($0.errors) } ?? "", s.map { String($0.reconnects) } ?? "", String(n.timing.recoveries),
+                o(n.connectMs, 0), o(n.timing.startupMs, 0), o(n.timing.lastSeekMs, 0), o(n.timing.maxSeekMs, 0),
+                String(n.timing.seeks), String(n.stalls), f(n.stallSeconds, 2)]
     }
 
     private static func dialogColumns(_ d: AudioStageStatus?, _ f: (Double, Int) -> String) -> [String] {

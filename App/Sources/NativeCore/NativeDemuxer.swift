@@ -1,6 +1,7 @@
 import CoreMedia
 import Foundation
 import MediaFormat
+import MediaIO
 import NitMath
 
 /// MKV/MP4/M2TS'deki Dolby Vision yapılandırması (`AVDOVIDecoderConfigurationRecord`).
@@ -162,6 +163,62 @@ enum DemuxError: LocalizedError {
     }
 }
 
+/// Demux girdisi: yerel dosya yolu ya da önden okuma tamponlu akış (S7: SMB, Dosyalar'ın ağ konumları).
+enum MediaInput {
+    case path(String)
+    /// `name`: biçim tahmini için dosya adı (uzantı).
+    case stream(ReadAheadStream, name: String)
+}
+
+/// FFmpeg'in özel G/Ç bağlamı (02-cozum §4.1): okuma ve sarma geri çağrıları önden okuma tamponuna gider.
+/// Okuma tampondan bloklar; ağ koparsa tampon yeniden dener, kapatılınca (durdurma) hemen hata döner.
+final class StreamIO {
+    let stream: ReadAheadStream
+    private(set) var context: UnsafeMutablePointer<AVIOContext>?
+    private static let bufferSize: Int32 = 256 << 10
+
+    init?(stream: ReadAheadStream) {
+        self.stream = stream
+        guard let buffer = av_malloc(Int(Self.bufferSize))?.assumingMemoryBound(to: UInt8.self) else { return nil }
+        let opaque = Unmanaged.passUnretained(self).toOpaque()
+        context = avio_alloc_context(buffer, Self.bufferSize, 0, opaque, { opaque, target, size in
+            guard let opaque, let target, size > 0 else { return arif_averror_eof() }
+            let io = Unmanaged<StreamIO>.fromOpaque(opaque).takeUnretainedValue()
+            let n = io.stream.read(into: UnsafeMutableRawBufferPointer(start: target, count: Int(size)))
+            if n > 0 { return Int32(n) }
+            return n == 0 ? arif_averror_eof() : arif_averror_eio()
+        }, nil, { opaque, offset, whence in
+            guard let opaque else { return -1 }
+            let stream = Unmanaged<StreamIO>.fromOpaque(opaque).takeUnretainedValue().stream
+            if whence & AVSEEK_SIZE != 0 { return stream.size }
+            let base: Int64
+            switch whence & ~AVSEEK_FORCE {
+            case SEEK_SET: base = 0
+            case SEEK_CUR: base = stream.offset
+            case SEEK_END: base = stream.size
+            default: return -1
+            }
+            let target = base + offset
+            guard target >= 0 else { return -1 }
+            stream.seek(to: target)
+            return target
+        })
+        if context == nil {
+            var unused: UnsafeMutablePointer<UInt8>? = buffer
+            av_freep(&unused)
+            return nil
+        }
+    }
+
+    deinit {
+        // FFmpeg tamponu büyütüp değiştirebilir: bırakılan, bağlamın o anki tamponudur.
+        if let context {
+            av_freep(&context.pointee.buffer)
+        }
+        avio_context_free(&context)
+    }
+}
+
 /// libavformat ile demux (02-cozum §4.1): video akışı ve (varsa) en uygun ses akışı. Müzik dosyalarında (S6)
 /// video yoktur ya da yalnızca kapak resmi vardır: o zaman yalnızca ses okunur.
 /// Tek bir thread'den kullanılmalıdır (NativePlayer'ın demux thread'i).
@@ -171,17 +228,49 @@ final class NativeDemuxer {
     private let streamIndex: Int32
     private let audioIndex: Int32
     private let audioTimeBase: (num: Int32, den: Int32)
+    /// Akış girdisinde özel G/Ç; bağlam kapatıldıktan sonra bırakılır.
+    private var io: StreamIO?
+    /// Akış girdisinin tamponu (HUD: ağ satırı); yerel dosyada `nil`.
+    let stream: ReadAheadStream?
+    /// Dosya sonu yerine okuma hatasıyla bittiyse nedeni (ör. ağ kesintisi uzun sürdü).
+    private(set) var readError: String?
     /// Video akışı; yalnızca-ses dosyada `nil`.
     let info: VideoStreamInfo?
     let audio: AudioStreamInfo?
     /// Dosyanın süresi (s); bilinmiyorsa 0.
     let duration: Double
 
-    init(path: String) throws {
+    convenience init(path: String) throws {
+        try self.init(input: .path(path))
+    }
+
+    init(input: MediaInput) throws {
         // `opened` kapatma için isteğe bağlı kalır; `ctx` açık bağlamın kendisidir.
         var opened: UnsafeMutablePointer<AVFormatContext>?
-        let openResult = avformat_open_input(&opened, path, nil, nil)
-        guard openResult >= 0, let ctx = opened else { throw DemuxError.open(Self.errorString(openResult)) }
+        var customIO: StreamIO?
+        var inputStream: ReadAheadStream?
+        let openResult: Int32
+        switch input {
+        case .path(let path):
+            openResult = avformat_open_input(&opened, path, nil, nil)
+        case .stream(let source, let name):
+            guard let io = StreamIO(stream: source), let allocated = avformat_alloc_context() else {
+                throw DemuxError.open("G/Ç bağlamı oluşturulamadı")
+            }
+            allocated.pointee.pb = io.context
+            allocated.pointee.flags |= AVFMT_FLAG_CUSTOM_IO
+            opened = allocated
+            customIO = io
+            inputStream = source
+            // Başarısızlıkta FFmpeg bağlamı kendisi bırakır; özel G/Ç bizde kalır (`customIO`).
+            openResult = avformat_open_input(&opened, name, nil, nil)
+        }
+        guard openResult >= 0, let ctx = opened else {
+            if let error = inputStream?.stats.lastError {
+                throw DemuxError.open("\(Self.errorString(openResult)) · \(error)")
+            }
+            throw DemuxError.open(Self.errorString(openResult))
+        }
         guard avformat_find_stream_info(ctx, nil) >= 0 else {
             avformat_close_input(&opened)
             throw DemuxError.open("akış bilgisi okunamadı")
@@ -223,12 +312,32 @@ final class NativeDemuxer {
         self.audio = audio
         self.audioIndex = audio == nil ? -1 : audioIndex
         self.audioTimeBase = audioTimeBase
+        io = customIO
+        stream = inputStream
         packet = av_packet_alloc()
     }
 
     deinit {
         av_packet_free(&packet)
         avformat_close_input(&context)
+        io = nil
+        stream?.close()
+    }
+
+    /// Okuma hatasından sonra yeniden denemeye hazırlar: akışın hatalı parçası ve FFmpeg'in G/Ç hata/son
+    /// durumu temizlenir. Ardından bir sarma (`seek`) okumayı yeniden başlatır.
+    func recover() {
+        readError = nil
+        stream?.retry()
+        if let pb = context?.pointee.pb {
+            pb.pointee.error = 0
+            pb.pointee.eof_reached = 0
+        }
+    }
+
+    /// Bloklanmış okumayı bırakır (durdurma): akış kapanır, okuma hata döner. Yerel dosyada etkisiz.
+    func interrupt() {
+        stream?.close()
     }
 
     /// Bir sonraki video ya da ses paketini okur; dosya sonunda `nil`.
@@ -236,7 +345,12 @@ final class NativeDemuxer {
         guard let context, let packet else { return nil }
         while true {
             let result = av_read_frame(context, packet)
-            if result < 0 { return nil }
+            if result < 0 {
+                if result != arif_averror_eof() {
+                    readError = Self.errorString(result) + (stream?.stats.lastError.map { " · \($0)" } ?? "")
+                }
+                return nil
+            }
             defer { av_packet_unref(packet) }
             let index = packet.pointee.stream_index
             guard index == streamIndex || index == audioIndex, packet.pointee.size > 0,

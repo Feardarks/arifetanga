@@ -32,7 +32,7 @@ jobs:
           xcodebuild -version
           xcrun --sdk iphoneos --show-sdk-version
 
-      - name: Native bağımlılık önbelleği (FFmpeg, libdovi)
+      - name: Native bağımlılık önbelleği (FFmpeg, libdovi, libsmb2)
         id: deps-cache
         uses: actions/cache/restore@v4
         with:

@@ -7,6 +7,7 @@
 
 static inline int arif_averror_eof(void) { return AVERROR_EOF; }
 static inline int arif_averror_eagain(void) { return AVERROR(EAGAIN); }
+static inline int arif_averror_eio(void) { return AVERROR(EIO); }
 static inline int64_t arif_nopts_value(void) { return AV_NOPTS_VALUE; }
 static inline int64_t arif_time_base(void) { return AV_TIME_BASE; }
 

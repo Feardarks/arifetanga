@@ -1,6 +1,7 @@
 import AVFoundation
 import CoreMedia
 import Foundation
+import MediaIO
 
 /// Kendi oynatma hattımız (S2.2, S3): libavformat demux →
 /// - Nit: VideoToolbox → kare kuyruğu; Referans: sıkıştırılmış örnekler → `AVSampleBufferVideoRenderer` (AS-1).
@@ -32,6 +33,8 @@ final class NativePlayer: @unchecked Sendable {
     var onLoop: (() -> Void)?
     /// Kod çözme ya da Referans hatası (ana thread'de).
     var onError: ((String) -> Void)?
+    /// Bilgi olayı (ana thread'de; ör. ağ kesintisinden kurtarma).
+    var onNotice: ((String) -> Void)?
     /// Referans yoluna gidecek paketi yeniden yazar (S2.3: P7 → P8.1 RPU dönüşümü). `nil` dönerse paket değişmez.
     var referencePacketRewriter: ((DemuxedPacket) -> Data?)?
     /// Nit yolundaki her paket için (S2.3: RPU'dan L1 okuma).
@@ -62,6 +65,10 @@ final class NativePlayer: @unchecked Sendable {
     private var flushResult: (generation: Int, ok: Bool)?
     private var thread: Thread?
     private let finished = DispatchSemaphore(value: 0)
+    /// Açılış ve sarma süreleri (S7, AS-3: sarma < 1,5 s).
+    private let createdAt = CACurrentMediaTime()
+    private var seekRequestedAt: CFTimeInterval?
+    private var timingValue = PlaybackTiming()
 
     // Yalnızca demux thread'i.
     private var videoPending: [DemuxedPacket] = []
@@ -97,6 +104,9 @@ final class NativePlayer: @unchecked Sendable {
     private var awaitingKeyframe = true
     private var skippedBeforeKeyframe = 0
     private var reportedAudioRenderer = false
+    /// Ağ okuması kalıcı hata verdiyse yeniden deneme zamanı (dosya sonu sayılmaz, döngü başa sarmaz).
+    private var readRetryAt: CFTimeInterval?
+    private var lastVideoPacketTime: Double?
 
     private static let maxVideoPackets = 360
     private static let maxVideoBytes = 64 << 20
@@ -112,9 +122,9 @@ final class NativePlayer: @unchecked Sendable {
     private static let historySeconds = 12.0
 
     /// - Parameter integerAudio: Kayıpsız kaynakta renderer'a tamsayı PCM (S6, bit-perfect yolu).
-    init(path: String, output: Output, synchronizer: AVSampleBufferRenderSynchronizer,
+    init(input: MediaInput, output: Output, synchronizer: AVSampleBufferRenderSynchronizer,
          audioRenderer: AVSampleBufferAudioRenderer, integerAudio: Bool = true) throws {
-        let demuxer = try NativeDemuxer(path: path)
+        let demuxer = try NativeDemuxer(input: input)
         var nitFormat: CMVideoFormatDescription?
         var referenceFormat: CMVideoFormatDescription?
         if let video = demuxer.info {
@@ -186,6 +196,8 @@ final class NativePlayer: @unchecked Sendable {
         let renderer = videoRenderer
         lock.unlock()
         frames.cancel()
+        // Ağdan veri beklerken bloklanmış demux okuması hemen bırakılır.
+        demuxer.interrupt()
         guard thread != nil, !wasStopped else { return }
         synchronizer.rate = 0
         _ = finished.wait(timeout: .now() + 0.5)
@@ -196,6 +208,13 @@ final class NativePlayer: @unchecked Sendable {
     var loop: Bool {
         get { lock.lock(); defer { lock.unlock() }; return loopEnabled }
         set { lock.lock(); loopEnabled = newValue; lock.unlock() }
+    }
+
+    /// Saat çalışıyor mu (açılış/sarma sonrası ilk kare ve ses hazır)?
+    var isClockRunning: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return clockStarted
     }
 
     var isPlaying: Bool {
@@ -215,6 +234,18 @@ final class NativePlayer: @unchecked Sendable {
         lock.lock()
         defer { lock.unlock() }
         return audioStatusValue
+    }
+
+    /// Akış girdisinin önden okuma ölçümleri (SMB, Dosyalar'ın ağ konumları); yerel dosyada `nil`.
+    var networkStats: ReadAheadStats? { demuxer.stream?.stats }
+    /// Akış girdisinin toplam boyutu (bayt).
+    var inputSize: Int64? { demuxer.stream?.size }
+
+    /// Açılış ve sarma süreleri, ağ kurtarmaları.
+    var timing: PlaybackTiming {
+        lock.lock()
+        defer { lock.unlock() }
+        return timingValue
     }
 
     /// M9 durumu (HUD, CSV); ses yoksa `nil`.
@@ -276,6 +307,7 @@ final class NativePlayer: @unchecked Sendable {
     func seek(to seconds: Double) {
         lock.lock()
         pendingSeek = (max(seconds, 0), false)
+        seekRequestedAt = CACurrentMediaTime()
         lock.unlock()
         frames.cancel()
     }
@@ -356,9 +388,27 @@ final class NativePlayer: @unchecked Sendable {
                     worked = true
                 }
             }
-            if wantsInput() {
+            if let retryAt = readRetryAt, CACurrentMediaTime() >= retryAt {
+                // Ağ kesintisinden kurtarma: son okunan video paketinden (yoksa oynatma noktasından) yeniden okunur;
+                // saat ve ses sürer, kuyruğa girmiş ses atlanır.
+                readRetryAt = nil
+                demuxer.recover()
+                performSeek(to: lastVideoPacketTime ?? mediaTime, keepAudio: true, renderer: renderer)
+                continue
+            }
+            if readRetryAt == nil, wantsInput() {
                 if let packet = demuxer.readPacket() {
+                    if packet.kind == .video, packet.pts.isValid { lastVideoPacketTime = packet.pts.seconds }
                     route(packet, background: background)
+                } else if let error = demuxer.readError, demuxer.stream != nil {
+                    lock.lock()
+                    timingValue.recoveries += 1
+                    let stopping = stopped
+                    lock.unlock()
+                    if !stopping {
+                        notice("Ağ okuması başarısız (\(error)); 1 s sonra yeniden denenecek")
+                        readRetryAt = CACurrentMediaTime() + 1
+                    }
                 } else {
                     endOfFile = true
                     // FLAC: baştan sona kesintisiz çözüldüyse STREAMINFO MD5'i karşılaştırılır (S6).
@@ -502,20 +552,37 @@ final class NativePlayer: @unchecked Sendable {
             let buffered = audioEnqueuedUntil.map { $0.seconds - start } ?? -1
             guard buffered >= 0.2 else { return }
         }
+        let now = CACurrentMediaTime()
         lock.lock()
         clockStarted = true
+        if let requested = seekRequestedAt {
+            // Kullanıcı sarması: istekten saatin yeniden başlamasına (ilk kare + 0,2 s ses hazır).
+            let ms = (now - requested) * 1000
+            timingValue.lastSeekMs = ms
+            timingValue.maxSeekMs = max(timingValue.maxSeekMs ?? 0, ms)
+            timingValue.seeks += 1
+            seekRequestedAt = nil
+        } else if timingValue.startupMs == nil {
+            timingValue.startupMs = (now - createdAt) * 1000
+        }
         lock.unlock()
         synchronizer.setRate(playing ? 1 : 0, time: CMTime(seconds: start, preferredTimescale: 90_000))
     }
 
     /// - Parameter keepAudio: Yol değişimi: saat ve ses sürer, zaten kuyruğa girmiş ses yeniden okunurken atlanır.
     private func performSeek(to target: Double, keepAudio: Bool, renderer: AVSampleBufferVideoRenderer?) {
+        if readRetryAt != nil {
+            // Kullanıcı kurtarma beklerken sardı: hata durumu temizlenip yeni hedeften okunur.
+            readRetryAt = nil
+            demuxer.recover()
+        }
         frames.clear()
         decoder?.flush()
         frames.clear()
         renderer?.flush()
         videoPending.removeAll()
         videoPendingBytes = 0
+        lastVideoPacketTime = nil
         demuxer.seek(to: target)
         awaitingKeyframe = true
         skippedBeforeKeyframe = 0
@@ -692,4 +759,19 @@ final class NativePlayer: @unchecked Sendable {
     private func report(_ message: String) {
         DispatchQueue.main.async { [weak self] in self?.onError?(message) }
     }
+
+    private func notice(_ message: String) {
+        DispatchQueue.main.async { [weak self] in self?.onNotice?(message) }
+    }
+}
+
+/// Açılış/sarma süreleri ve ağ kurtarmaları (HUD, CSV; AS-3).
+struct PlaybackTiming: Equatable {
+    /// Oyuncunun oluşturulmasından saatin başlamasına (ms); açılışın ağ kısmı (bağlanma) ayrıca ölçülür.
+    var startupMs: Double?
+    var lastSeekMs: Double?
+    var maxSeekMs: Double?
+    var seeks = 0
+    /// Ağ okuması kalıcı hata verip yeniden denenme sayısı.
+    var recoveries = 0
 }

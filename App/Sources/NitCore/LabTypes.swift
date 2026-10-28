@@ -1,5 +1,6 @@
 import AudioDSP
 import Foundation
+import MediaIO
 import NitMath
 
 enum RenderMode: String, CaseIterable {
@@ -118,6 +119,8 @@ struct NitParams: Equatable {
     /// S6 bit-perfect: kayıpsız kaynakta renderer'a tamsayı PCM (sonraki açılışta geçerli) ve oturum kipi.
     var integerAudio = true
     var sessionMode: AudioSessionController.ModeChoice = .automatic
+    /// S7: Dosyalar'ın ağ/harici konumlarındaki (SMB, USB) dosyalar önden okuma tamponuyla açılır (sonraki açılışta).
+    var filesReadAhead = true
 
     var boostSettings: BoostSettings {
         BoostSettings(percent: boostPercent, mode: limiterMode, aggressive: boostAggressive, keepAtmos: boostKeepAtmos,
@@ -151,7 +154,7 @@ struct NitParams: Equatable {
             + "sapma_stop=\(sceneDeviationStops); kesim_esigi=\(cutThreshold); olcekleyici=\(highQualityScaler ? "kaliteli" : "bilineer"); "
             + "motor=\(preferNativeEngine ? "kendi hattimiz" : "AVPlayer (MP4/MOV)"); \(dialogSettings.csv); \(boostSettings.csv)"
             + (rendererVolumeTest ? "; renderer_volume_testi=1,5" : "")
-            + "; tamsayi_pcm=\(integerAudio); oturum_kipi=\(sessionMode.rawValue)"
+            + "; tamsayi_pcm=\(integerAudio); oturum_kipi=\(sessionMode.rawValue); dosyalar_onden_okuma=\(filesReadAhead)"
     }
 }
 
@@ -207,6 +210,23 @@ struct BoostMeters: Equatable {
         clipLit = lastClip.map { now - $0 <= 0.5 } ?? false
         heavyReductionFraction = recordCount > 0 ? Double(heavyCount) / Double(recordCount) : nil
     }
+}
+
+/// S7: ağ kaynağının durumu (HUD, CSV; AS-3, AS-23). Yerel dosyada `stats` yoktur, zamanlamalar yine ölçülür.
+struct NetworkStatus: Equatable {
+    /// "SMB", "Dosyalar SMB", "Dosyalar (harici)" ya da "Yerel".
+    var kind: String
+    var location: String
+    var stats: ReadAheadStats?
+    /// Hazır tamponun oynatma süresi karşılığı (s): ortalama bit hızıyla (boyut / süre).
+    var bufferSeconds: Double?
+    var timing = PlaybackTiming()
+    /// SMB'de oturum açma + dosya açma süresi (ms) ve sunucunun azami okuma boyutu.
+    var connectMs: Double?
+    var maxReadKB: Int?
+    /// Oynarken ≥ 250 ms yeni kare gelmeyen anlar (Nit yolu) ve toplam süreleri.
+    var stalls = 0
+    var stallSeconds = 0.0
 }
 
 /// Arayüze 10 Hz'de giden anlık görüntü.
@@ -266,6 +286,9 @@ struct LabSnapshot {
     /// S6: sinyal yolu ve bit-perfect değerlendirmesi (yalnızca kendi hattımızda).
     var signalPath: SignalPathStatus?
     var signalPathLines: [String] = []
+    /// S7: ağ ve zamanlama satırları.
+    var network: NetworkStatus?
+    var networkLines: [String] = []
 
     /// P-2: çıkış hiçbir zaman sistemin o an verdiği headroom'u aşmaz.
     var p2OK: Bool { outputMax <= hCur + 1e-6 }

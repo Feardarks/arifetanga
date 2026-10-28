@@ -1,5 +1,6 @@
 import AudioDSP
 import AVFoundation
+import MediaIO
 import NitMath
 import QuartzCore
 import UIKit
@@ -106,6 +107,14 @@ final class LabEngine: NSObject {
     private var lastSessionRefresh: CFTimeInterval = 0
     private var loggedSignalPath: String?
     private var loggedMD5: String?
+    /// S7: açılış belirteci (geç biten açılış, sonradan seçilen kaynağın yerine geçmesin), ağ kaynağı ve takılmalar.
+    private var loadGeneration = 0
+    private var network: NetworkStatus?
+    private var stallWatchSince: CFTimeInterval?
+    private var lastFrameHostTime: CFTimeInterval?
+    private var stallStart: CFTimeInterval?
+    private var loggedRecoveries = 0
+    private var loggedSeeks = 0
     /// DV P5'in şekillendirme verisi okunamazsa Nit yerine Referans gösterilir (yanlış renk yerine).
     private var nativeForcedReference = false
     private static let nativeExtensions: Set<String> = ["mkv", "webm", "m2ts", "mts", "ts"]
@@ -245,7 +254,10 @@ final class LabEngine: NSObject {
         event("Dosya: \(sourceLabel)")
 
         let ext = url.pathExtension.lowercased()
-        if Self.nativeExtensions.contains(ext) || Self.audioExtensions.contains(ext) || params.preferNativeEngine {
+        let kind = Self.locationKind(url)
+        if kind != "Yerel" { event("Konum: \(kind)" + (url.scheme == "smb" ? "" : " · \(Self.shortPath(url))")) }
+        // SMB'yi yalnızca kendi hattımız okur (libsmb2 + özel AVIOContext).
+        if url.scheme == "smb" || Self.nativeExtensions.contains(ext) || Self.audioExtensions.contains(ext) || params.preferNativeEngine {
             loadNative(url: url)
             return
         }
@@ -270,6 +282,7 @@ final class LabEngine: NSObject {
 
     func showPattern(_ spec: PatternSpec) {
         endTest()
+        loadGeneration += 1
         player.pause()
         resetFrameState()
         source = .pattern(spec)
@@ -454,6 +467,12 @@ final class LabEngine: NSObject {
         ticksSinceFrame = 0
         cadenceRing.removeAll()
         snapshot.droppedFrames = 0
+        network = nil
+        stallWatchSince = nil
+        lastFrameHostTime = nil
+        stallStart = nil
+        loggedRecoveries = 0
+        loggedSeeks = 0
         renderer?.gpuStats.reset()
         renderer?.flushCache()
         needsRender = true
@@ -599,6 +618,7 @@ final class LabEngine: NSObject {
                 }
             }
             if isPlayingNow { ticksSinceFrame += 1 }
+            detectStall(now: now, newFrame: newFramePTS != nil)
         }
 
         // DV P5 (S2.4): gösterilen karenin kod çözüm parametreleri; gelmezse önceki kare parametreleri sürer.
@@ -706,6 +726,7 @@ final class LabEngine: NSObject {
             fillAudioSnapshot()
             fillAudioStageSnapshot()
             fillSignalPathSnapshot(now: now)
+            fillNetworkSnapshot()
             fillSceneWhiteSnapshot()
             fillRpuSnapshot()
             onSnapshot?(snapshot)
@@ -718,33 +739,88 @@ final class LabEngine: NSObject {
         native?.isPlaying ?? (player.timeControlStatus == .playing)
     }
 
+    /// Kaynağın türü: SMB (libsmb2), Dosyalar'ın SMB'si (iOS smbclientd), Dosyalar'ın harici konumu ya da yerel.
+    /// Dosyalar'da bağlanan sunucular ve sürücüler "LiveFiles" altında görünür **[cihazda doğrulanmalı]**.
+    nonisolated static func locationKind(_ url: URL) -> String {
+        if url.scheme == "smb" { return "SMB" }
+        if url.path.contains("/LiveFiles/com.apple.filesystems.smbclientd") { return "Dosyalar SMB" }
+        if url.path.contains("/LiveFiles/") { return "Dosyalar (harici)" }
+        return "Yerel"
+    }
+
+    /// Olay günlüğü için yolun son dört bileşeni (konum doğrulaması).
+    nonisolated static func shortPath(_ url: URL) -> String {
+        "…/" + url.pathComponents.suffix(4).joined(separator: "/")
+    }
+
     private func loadNative(url: URL) {
         player.replaceCurrentItem(with: nil)
+        loadGeneration += 1
+        let generation = loadGeneration
         let path = url.path
         let output: NativePlayer.Output = params.mode == .nit ? .nit : .reference
         let title = url.lastPathComponent
         let synchronizer = self.synchronizer
         let audioRenderer = self.audioRenderer
         let integerAudio = params.integerAudio
+        let kind = Self.locationKind(url)
+        let smb = SMBLocation(url: url)
+        let password = smb.map { SMBKeychain.password(for: $0.server) ?? "" }
+        let readAhead = smb == nil && kind != "Yerel" && params.filesReadAhead
+        let base = NetworkStatus(kind: kind, location: smb.map { "\($0.server.displayName)/\($0.share)" } ?? Self.shortPath(url))
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var status = base
+            var stream: ReadAheadStream?
             do {
-                let player = try NativePlayer(path: path, output: output, synchronizer: synchronizer,
+                let input: MediaInput
+                if let smb {
+                    // 4 MiB parça, 48 MiB ileri + 8 MiB geri (02-cozum §7.2: ağ tamponu ≈ 64 MB); kesintide ≈ 20 s denenir.
+                    let began = CACurrentMediaTime()
+                    let file = try SMBFile(location: smb, password: password ?? "")
+                    status.connectMs = (CACurrentMediaTime() - began) * 1000
+                    status.maxReadKB = file.maxReadSize / 1024
+                    stream = ReadAheadStream(source: file, chunkSize: 4 << 20, aheadLimit: 48 << 20, behindLimit: 8 << 20,
+                                             retries: 12)
+                    input = .stream(stream!, name: title)
+                } else if readAhead {
+                    let file = try FileRangeSource(path: path)
+                    stream = ReadAheadStream(source: file, chunkSize: 4 << 20, aheadLimit: 48 << 20, behindLimit: 8 << 20,
+                                             retries: 12)
+                    input = .stream(stream!, name: title)
+                } else {
+                    input = .path(path)
+                }
+                let player = try NativePlayer(input: input, output: output, synchronizer: synchronizer,
                                               audioRenderer: audioRenderer, integerAudio: integerAudio)
-                DispatchQueue.main.async { MainActor.assumeIsolated { self?.attachNative(player, title: title) } }
+                let opened = status
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated { self?.attachNative(player, title: title, generation: generation, network: opened) }
+                }
             } catch {
+                stream?.close()
                 let message = error.localizedDescription
-                DispatchQueue.main.async { MainActor.assumeIsolated { self?.fail(message) } }
+                DispatchQueue.main.async {
+                    MainActor.assumeIsolated {
+                        guard let self, self.loadGeneration == generation else { return }
+                        self.fail(message)
+                    }
+                }
             }
         }
     }
 
-    private func attachNative(_ player: NativePlayer, title: String) {
+    private func attachNative(_ player: NativePlayer, title: String, generation: Int, network status: NetworkStatus) {
         // Açılış sürerken kullanıcı başka bir kaynak seçtiyse bu oyuncu kullanılmaz.
-        guard case .file(let url) = source, url.lastPathComponent == title, native == nil else {
+        guard case .file = source, generation == loadGeneration, native == nil else {
             player.stop()
             return
         }
         native = player
+        network = status
+        if let ms = status.connectMs {
+            event("SMB bağlandı: \(status.location) · \(TR.num(ms, 0)) ms · azami okuma \(status.maxReadKB ?? 0) KB"
+                  + (player.inputSize.map { " · dosya \(TR.num(Double($0) / 1e9, 2)) GB" } ?? ""))
+        }
         // Müzik dosyasında (S6) video yoktur: ekran siyah kalır, ses ve göstergeler çalışır.
         let info = player.info
         hdrHint = info?.isHDR ?? false
@@ -783,6 +859,7 @@ final class LabEngine: NSObject {
         player.loop = loop
         player.onLoop = { [weak self] in MainActor.assumeIsolated { self?.nativeLooped() } }
         player.onError = { [weak self] message in MainActor.assumeIsolated { self?.fail(message) } }
+        player.onNotice = { [weak self] message in MainActor.assumeIsolated { self?.event(message) } }
         player.setOutput(effectiveMode == .nit ? .nit : .reference)
         player.setAudioStage(stageSettings)
         boostMeters = BoostMeters()
@@ -836,6 +913,87 @@ final class LabEngine: NSObject {
         if key != loggedAudioLabel {
             loggedAudioLabel = key
             event(status.label)
+        }
+    }
+
+    // MARK: S7 ağ
+
+    /// Takılma (AS-3): Nit yolunda, saat oynarken ≥ 250 ms (ya da 4 kare) yeni kare gelmemesi. Sarma ve açılış
+    /// (saat duruyor), duraklatma ve arka plan sayılmaz; o anlar ayrıca sarma süresi olarak ölçülür.
+    private func detectStall(now: CFTimeInterval, newFrame: Bool) {
+        guard let native, network != nil, native.info != nil, native.currentOutput == .nit, native.isPlaying,
+              native.isClockRunning, UIApplication.shared.applicationState == .active else {
+            closeStall(now: now)
+            stallWatchSince = nil
+            lastFrameHostTime = nil
+            return
+        }
+        if stallWatchSince == nil {
+            stallWatchSince = now
+            lastFrameHostTime = now
+        }
+        if newFrame {
+            closeStall(now: now)
+            lastFrameHostTime = now
+            return
+        }
+        guard stallStart == nil, let last = lastFrameHostTime, now - last >= max(0.25, frameDuration * 4) else { return }
+        stallStart = last
+        network?.stalls += 1
+        let buffered = native.networkStats.map { " · tampon \(TR.num(Double($0.bufferedAhead) / 1_000_000, 1)) MB" } ?? ""
+        event("Takılma #\(network?.stalls ?? 0) @ \(TR.time(native.mediaTime))\(buffered)")
+    }
+
+    private func closeStall(now: CFTimeInterval) {
+        guard let start = stallStart else { return }
+        stallStart = nil
+        let seconds = now - start
+        network?.stallSeconds += seconds
+        event("Takılma bitti: \(TR.num(seconds, 2)) s")
+    }
+
+    /// Ağ satırları (HUD): tampon (MB ve oynatma süresi), hız, beklemeler, hata/yeniden bağlanma, sarma/açılış.
+    private func fillNetworkSnapshot() {
+        guard let native, var status = network else {
+            snapshot.network = nil
+            snapshot.networkLines = []
+            return
+        }
+        status.stats = native.networkStats
+        status.timing = native.timing
+        if let stats = status.stats, let size = native.inputSize, native.duration > 0, size > 0 {
+            status.bufferSeconds = Double(stats.bufferedAhead) / (Double(size) / native.duration)
+        }
+        network = status
+        snapshot.network = status
+        var lines: [String] = []
+        if let s = status.stats {
+            var head = "Ağ: \(status.kind) · \(status.location) · tampon \(TR.num(Double(s.bufferedAhead) / 1_000_000, 0)) MB"
+            if let seconds = status.bufferSeconds { head += " (\(TR.num(seconds, 1)) sn)" }
+            if let rate = s.throughputMBps { head += " · \(TR.num(rate, 1)) MB/s" }
+            lines.append(head)
+            var detail = "Ağ: bekleme \(s.waits) (\(TR.num(s.waitSeconds, 1)) s, en uzun \(TR.num(s.longestWait * 1000, 0)) ms)"
+            detail += " · hata \(s.errors) · yeniden bağlanma \(s.reconnects) · kurtarma \(status.timing.recoveries)"
+            detail += " · takılma \(status.stalls)" + (status.stallSeconds > 0 ? " (\(TR.num(status.stallSeconds, 1)) s)" : "")
+            lines.append(detail)
+        }
+        var timing: [String] = []
+        if let ms = status.connectMs { timing.append("bağlanma \(TR.num(ms, 0)) ms") }
+        if let ms = status.timing.startupMs { timing.append("açılış \(TR.num(ms, 0)) ms") }
+        if let ms = status.timing.lastSeekMs {
+            timing.append("sarma \(TR.num(ms, 0)) ms (en çok \(TR.num(status.timing.maxSeekMs ?? ms, 0)), \(status.timing.seeks) kez)")
+        }
+        if status.stats == nil { timing.append("takılma \(status.stalls)") }
+        if !timing.isEmpty { lines.append("Zamanlama: " + timing.joined(separator: " · ")) }
+        snapshot.networkLines = lines
+
+        if status.timing.seeks != loggedSeeks, let ms = status.timing.lastSeekMs {
+            loggedSeeks = status.timing.seeks
+            event("Sarma süresi: \(TR.num(ms, 0)) ms" + (ms >= 1500 ? " (hedef < 1,5 s aşıldı)" : ""))
+        }
+        if status.timing.recoveries != loggedRecoveries {
+            loggedRecoveries = status.timing.recoveries
+            event("Ağ kurtarma #\(status.timing.recoveries)" + (status.stats?.lastError.map { ": \($0)" } ?? ""))
         }
     }
 
@@ -1306,6 +1464,7 @@ final class LabEngine: NSObject {
             referenceWhite: snapshot.referenceWhite, frameWhite: snapshot.frameWhite, sceneWhite: snapshot.sceneWhite,
             anchor: snapshot.anchor, histogramWhite: snapshot.histogramWhite, rpuMicros: snapshot.rpuMeanMicros,
             audioCPU: snapshot.audioCPUPercent, audioStage: snapshot.audioStage, boostMeters: snapshot.boostMeters,
-            route: route.rawValue, signalPath: snapshot.signalPath, chromeVisible: chromeVisible, panel: panelName, event: event)
+            route: route.rawValue, signalPath: snapshot.signalPath, network: snapshot.network, chromeVisible: chromeVisible,
+            panel: panelName, event: event)
     }
 }

@@ -7,3 +7,6 @@ FFMPEG_VERSION=8.0
 # libdovi (dovi_tool deposundaki dolby_vision crate'i, MIT). Sabit commit; günlükte yazılır.
 DOVI_TOOL_REPO=https://github.com/quietvoid/dovi_tool
 DOVI_TOOL_REF=main
+# libsmb2 (SMB2/3 istemcisi, LGPL-2.1; statik). S7: ağ oynatma (AS-3, AS-23). Kerberos kapalı (NTLMSSP).
+LIBSMB2_REPO=https://github.com/sahlberg/libsmb2
+LIBSMB2_REF=libsmb2-6.3.1

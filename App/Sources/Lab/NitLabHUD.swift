@@ -49,6 +49,9 @@ struct NitLabHUD: View {
                         line(text, color: text.hasPrefix("Bit-perfect ✓") || text.hasPrefix("FLAC MD5 ✓") ? DS.green
                                           : text.hasPrefix("Bit-perfect değil") || text.hasPrefix("FLAC MD5 ✗") ? DS.amber : DS.secondary)
                     }
+                    ForEach(Array(snapshot.networkLines.enumerated()), id: \.offset) { _, text in
+                        line(text, color: text.contains("takılma 0") || !text.contains("takılma") ? DS.secondary : DS.amber)
+                    }
                     ForEach(Array(snapshot.audioStageLines.enumerated()), id: \.offset) { _, text in
                         line(text, color: text.hasPrefix("● KIRPMA") ? DS.red : DS.secondary)
                     }
