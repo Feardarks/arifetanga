@@ -18,6 +18,13 @@ struct FilePanel: View {
                 }
                 .buttonStyle(.plain)
 
+                Button {
+                    model.smbPresented = true
+                } label: {
+                    row("SMB sunucuları…", detail: "NAS · libsmb2 · Bonjour · hız testi (AS-23)")
+                }
+                .buttonStyle(.plain)
+
                 if !model.recents.isEmpty {
                     section("Son açılanlar")
                     ForEach(model.recents) { recent in
@@ -54,7 +61,7 @@ struct FilePanel: View {
                 Toggle("MP4/MOV'u kendi hattımızla aç", isOn: $model.params.preferNativeEngine)
                     .font(.subheadline)
                     .tint(DS.green)
-                Text("MKV, M2TS ve TS her zaman kendi hattımızla açılır: FFmpeg demux, VideoToolbox, Dolby Vision Referans'ta sistemde. Bu sürümde ses yok (S3).")
+                Text("MKV, M2TS, TS, müzik dosyaları ve SMB her zaman kendi hattımızla açılır: FFmpeg demux, VideoToolbox, Dolby Vision Referans'ta sistemde.")
                     .font(.footnote)
                     .foregroundStyle(DS.secondary)
                     .padding(.top, 2)

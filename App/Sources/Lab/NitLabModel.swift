@@ -10,6 +10,8 @@ final class NitLabModel: ObservableObject {
         var id: String { name }
         var name: String
         var bookmark: Data
+        /// SMB kaynağı (S7): `smb://` adresi; yer imi yerine.
+        var link: String?
     }
 
     @Published private(set) var snapshot = LabSnapshot()
@@ -22,6 +24,8 @@ final class NitLabModel: ObservableObject {
     @Published var hudCompact = false
     @Published var loop = true { didSet { engine.loop = loop } }
     @Published var importerPresented = false
+    /// S7: SMB gezgini.
+    @Published var smbPresented = false
     @Published var toast: String?
     @Published var shareItem: ShareItem?
     @Published private(set) var recents: [RecentFile] = []
@@ -67,6 +71,7 @@ final class NitLabModel: ObservableObject {
     @Published private(set) var toneTestActive = false
 
     let engine = LabEngine()
+    let smb = SMBBrowserModel()
     private static let gammaKey = "nitLab.sdrGamma"
     private var toastHistory: [HeadroomStatus: Date] = [:]
     private var toastTask: Task<Void, Never>?
@@ -80,6 +85,11 @@ final class NitLabModel: ObservableObject {
             self?.params.boostPercent = value
             self?.showToast("Rota \(route.rawValue): boost %\(Int(value.rounded())) (rota hafızası)")
         }
+        smb.onOpen = { [weak self] url in
+            self?.smbPresented = false
+            self?.open(url: url)
+        }
+        smb.onEvent = { [weak self] text in self?.engine.event(text) }
         loadRecents()
         // Tonalite testinde seçilen gama varsayılan olur (K11).
         let savedGamma = UserDefaults.standard.double(forKey: Self.gammaKey)
@@ -115,6 +125,10 @@ final class NitLabModel: ObservableObject {
     }
 
     func open(recent: RecentFile) {
+        if let link = recent.link, let url = URL(string: link) {
+            open(url: url)
+            return
+        }
         var stale = false
         guard let url = try? URL(resolvingBookmarkData: recent.bookmark, options: [], relativeTo: nil,
                                  bookmarkDataIsStale: &stale) else {
@@ -292,6 +306,14 @@ final class NitLabModel: ObservableObject {
     }
 
     private func rememberRecent(_ url: URL) {
+        if url.scheme == "smb" {
+            let name = "SMB · " + url.lastPathComponent
+            recents.removeAll { $0.name == name }
+            recents.insert(RecentFile(name: name, bookmark: Data(), link: url.absoluteString), at: 0)
+            if recents.count > 5 { recents.removeLast(recents.count - 5) }
+            saveRecents()
+            return
+        }
         guard let data = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) else { return }
         let entry = RecentFile(name: url.lastPathComponent, bookmark: data)
         recents.removeAll { $0.name == entry.name }

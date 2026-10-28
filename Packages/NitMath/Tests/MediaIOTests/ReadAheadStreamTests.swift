@@ -179,3 +179,28 @@ final class FileRangeSourceTests: XCTestCase {
         XCTAssertThrowsError(try FileRangeSource(path: url.path + ".yok"))
     }
 }
+
+final class ThroughputTestTests: XCTestCase {
+    /// 64 KiB'lık okumalar, her biri 2 ms: ≈ 32 MB/s civarı; rastgele 256 KiB = 4 okuma ≈ 8 ms.
+    func testMeasuresSequentialRateAndRandomLatency() throws {
+        let source = FakeSource(size: 64 << 20, latency: 0.002, maxRead: 64 << 10)
+        let result = try ThroughputTest.run(source: source, label: "sahte", seconds: 0.5, requestSize: 1 << 20,
+                                            randomReads: 5, randomSize: 256 << 10)
+        XCTAssertGreaterThan(result.bytes, 1 << 20)
+        XCTAssertGreaterThan(result.megabytesPerSecond, 5)
+        XCTAssertLessThan(result.megabytesPerSecond, 40, "gecikme ölçüme yansır")
+        XCTAssertEqual(result.randomReads, 5)
+        XCTAssertGreaterThanOrEqual(result.randomMeanMs, 7)
+        XCTAssertGreaterThanOrEqual(result.randomMaxMs, result.randomMeanMs)
+        XCTAssertGreaterThan(result.firstReadMs, 1.5)
+    }
+
+    func testStopsAtEndAndHonoursCancel() throws {
+        let small = FakeSource(size: 3_000_000, latency: 0)
+        let whole = try ThroughputTest.run(source: small, label: "küçük", randomReads: 2, randomSize: 4096)
+        XCTAssertEqual(whole.bytes, 3_000_000)
+        let cancelled = try ThroughputTest.run(source: small, label: "iptal", randomReads: 3, cancelled: { true })
+        XCTAssertEqual(cancelled.bytes, 0)
+        XCTAssertEqual(cancelled.randomReads, 0)
+    }
+}

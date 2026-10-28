@@ -41,6 +41,9 @@ struct NitLabScreen: View {
         .sheet(item: $model.shareItem) { item in
             ActivityView(items: [item.url])
         }
+        .fullScreenCover(isPresented: $model.smbPresented) {
+            SMBBrowserView(model: model.smb) { model.smbPresented = false }
+        }
     }
 
     private var isTesting: Bool { model.equality != nil || model.toneTestActive }

@@ -18,6 +18,11 @@ public final class FileRangeSource: RangeSource, @unchecked Sendable {
             close(fd)
             throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
         }
+        #if canImport(Darwin)
+        // Akış okuması: veri bir kez okunur; sayfa önbelleğine alınmaz (büyük remux'ta bellek baskısı ve hız
+        // testinde önbellekten okuma olmasın).
+        _ = fcntl(fd, F_NOCACHE, 1)
+        #endif
         descriptor = fd
         size = Int64(info.st_size)
     }

@@ -112,8 +112,8 @@ final class SMBFile: RangeSource, @unchecked Sendable {
     private let counterLock = NSLock()
     private var reconnects = 0
 
-    /// Aynı anda uçuştaki okuma isteği ve bir okumanın ilerlemesiz bekleyebileceği süre.
-    static let pipelineDepth: Int32 = 8
+    /// Aynı anda uçuştaki okuma isteği (hız testinde 1 ile karşılaştırılır) ve ilerlemesiz bekleme sınırı.
+    var pipelineDepth: Int32 = 8
     static let stallTimeoutMs: Int32 = 8000
 
     init(location: SMBLocation, password: String) throws {
@@ -165,9 +165,10 @@ final class SMBFile: RangeSource, @unchecked Sendable {
             counterLock.unlock()
         }
         // Parça: istek başına en çok sunucunun azami okuması; bir tampon parçası en az 8 isteğe bölünür.
-        let piece = UInt32(max(64 << 10, min(maxReadSize, Int(count) / Int(Self.pipelineDepth))))
+        let depth = max(pipelineDepth, 1)
+        let piece = depth == 1 ? UInt32(maxReadSize) : UInt32(max(64 << 10, min(maxReadSize, Int(count) / Int(depth))))
         let n = arif_smb2_pread_pipelined(context, handle, base.assumingMemoryBound(to: UInt8.self), UInt64(count),
-                                          UInt64(offset), piece, Self.pipelineDepth, Self.stallTimeoutMs)
+                                          UInt64(offset), piece, depth, Self.stallTimeoutMs)
         if n < 0 {
             // Yarıda kalan istekler tampona yazabilir: bağlam hemen kapatılır, sonraki okuma yeniden bağlanır.
             let message = SMBConnection.errorText(context)
@@ -181,7 +182,18 @@ final class SMBFile: RangeSource, @unchecked Sendable {
 }
 
 /// SMB parolaları Keychain'de (internet parolası, SMB protokolü; yalnızca bu cihaz, ilk kilit açılışından sonra).
+/// "Kaydetme" seçilirse parola yalnızca uygulama açıkken bellekte tutulur.
 enum SMBKeychain {
+    private static let memoryLock = NSLock()
+    private static var memory: [String: String] = [:]
+
+    /// Bu oturum için (Keychain'e yazmadan).
+    static func remember(_ password: String, for server: SMBServer) {
+        memoryLock.lock()
+        memory[server.id] = password
+        memoryLock.unlock()
+    }
+
     private static func query(_ server: SMBServer) -> [String: Any] {
         [kSecClass as String: kSecClassInternetPassword,
          kSecAttrServer as String: server.host,
@@ -190,6 +202,10 @@ enum SMBKeychain {
     }
 
     static func password(for server: SMBServer) -> String? {
+        memoryLock.lock()
+        let remembered = memory[server.id]
+        memoryLock.unlock()
+        if let remembered { return remembered }
         var request = query(server)
         request[kSecReturnData as String] = true
         request[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -210,6 +226,9 @@ enum SMBKeychain {
     }
 
     static func delete(for server: SMBServer) {
+        memoryLock.lock()
+        memory[server.id] = nil
+        memoryLock.unlock()
         SecItemDelete(query(server) as CFDictionary)
     }
 }
