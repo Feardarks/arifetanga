@@ -45,10 +45,10 @@ struct NitLabScreen: View {
 
     private var isTesting: Bool { model.equality != nil || model.toneTestActive }
 
-    /// MP4/MOV ve kendi hattımızın açtığı kapsayıcılar (MKV, M2TS, TS).
+    /// MP4/MOV, kendi hattımızın açtığı kapsayıcılar (MKV, M2TS, TS) ve müzik dosyaları (S6: FLAC, WAV, ALAC…).
     private static let videoTypes: [UTType] = {
-        var types: [UTType] = [.movie, .mpeg4Movie, .quickTimeMovie]
-        for ext in ["mkv", "webm", "m2ts", "mts", "ts"] {
+        var types: [UTType] = [.movie, .mpeg4Movie, .quickTimeMovie, .audio]
+        for ext in ["mkv", "webm", "m2ts", "mts", "ts"] + LabEngine.audioExtensions.sorted() {
             if let type = UTType(filenameExtension: ext) { types.append(type) }
         }
         return types

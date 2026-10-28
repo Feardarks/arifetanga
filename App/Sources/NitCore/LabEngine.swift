@@ -101,9 +101,17 @@ final class LabEngine: NSObject {
     private var route = AudioRouteClass.current
     private var boostMeters = BoostMeters()
     private var lastBoostEvent: CFTimeInterval = 0
+    /// S6: oturum hızı/kipi ve sinyal yolu.
+    private let audioSession = AudioSessionController()
+    private var lastSessionRefresh: CFTimeInterval = 0
+    private var loggedSignalPath: String?
+    private var loggedMD5: String?
     /// DV P5'in şekillendirme verisi okunamazsa Nit yerine Referans gösterilir (yanlış renk yerine).
     private var nativeForcedReference = false
     private static let nativeExtensions: Set<String> = ["mkv", "webm", "m2ts", "mts", "ts"]
+    /// Müzik dosyaları (S6): her zaman kendi hattımız (bit-perfect yolu, oturum hızı).
+    nonisolated static let audioExtensions: Set<String> = ["flac", "wav", "w64", "aif", "aiff", "aifc", "caf", "m4a", "alac", "mka",
+                                               "mp3", "ogg", "oga", "opus", "wv", "ape"]
 
     // Dolby Vision RPU (S2.3): L1 sahne beyazı ve Referans'ta P7 → P8.1.
     private var dovi: DoviRpuProcessor?
@@ -183,6 +191,8 @@ final class LabEngine: NSObject {
         let recalled = stored >= 100 ? stored : 100
         event("Rota: \(old.rawValue) → \(newRoute.rawValue) · tavan \(TR.num(newRoute.ceilingDBTP, 1)) dBTP · boost %\(Int(recalled.rounded())) (rota hafızası)")
         native?.setAudioStage(stageSettings)
+        // USB DAC takılınca/çıkınca otomatik kip değişebilir; tercih edilen hız yeni rotaya yeniden uygulanır.
+        if let native { prepareSession(for: native, reason: "rota") }
         if abs(recalled - params.boostPercent) > 0.01 { onBoostRecall?(recalled, newRoute) }
     }
 
@@ -234,7 +244,8 @@ final class LabEngine: NSObject {
         snapshot.formatLabel = "Yükleniyor…"
         event("Dosya: \(sourceLabel)")
 
-        if Self.nativeExtensions.contains(url.pathExtension.lowercased()) || params.preferNativeEngine {
+        let ext = url.pathExtension.lowercased()
+        if Self.nativeExtensions.contains(ext) || Self.audioExtensions.contains(ext) || params.preferNativeEngine {
             loadNative(url: url)
             return
         }
@@ -581,7 +592,7 @@ final class LabEngine: NSObject {
                         let frameLabel = "\(CVPixelBufferGetWidth(pb))×\(CVPixelBufferGetHeight(pb)) · \(format.label)"
                         // Kendi hattımızda akış etiketi (codec, DV profili) korunur.
                         if native == nil { snapshot.formatLabel = frameLabel }
-                        snapshot.isHDR = format.transfer.isHDR || (native?.info.isHDR ?? false)
+                        snapshot.isHDR = format.transfer.isHDR || (native?.info?.isHDR ?? false)
                         event("Biçim: \(frameLabel)")
                     }
                     needsRender = true
@@ -684,7 +695,7 @@ final class LabEngine: NSObject {
             snapshot.vsyncJitterMs = jitterRing.max() ?? 0
             if let native {
                 snapshot.currentTime = native.mediaTime
-                snapshot.duration = native.info.duration
+                snapshot.duration = native.duration
             } else {
                 snapshot.currentTime = player.currentTime().seconds.isFinite ? player.currentTime().seconds : 0
                 let duration = player.currentItem?.duration.seconds ?? 0
@@ -694,6 +705,7 @@ final class LabEngine: NSObject {
             snapshot.recordingSeconds = telemetry.elapsed
             fillAudioSnapshot()
             fillAudioStageSnapshot()
+            fillSignalPathSnapshot(now: now)
             fillSceneWhiteSnapshot()
             fillRpuSnapshot()
             onSnapshot?(snapshot)
@@ -713,10 +725,11 @@ final class LabEngine: NSObject {
         let title = url.lastPathComponent
         let synchronizer = self.synchronizer
         let audioRenderer = self.audioRenderer
+        let integerAudio = params.integerAudio
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             do {
                 let player = try NativePlayer(path: path, output: output, synchronizer: synchronizer,
-                                              audioRenderer: audioRenderer)
+                                              audioRenderer: audioRenderer, integerAudio: integerAudio)
                 DispatchQueue.main.async { MainActor.assumeIsolated { self?.attachNative(player, title: title) } }
             } catch {
                 let message = error.localizedDescription
@@ -732,19 +745,21 @@ final class LabEngine: NSObject {
             return
         }
         native = player
+        // Müzik dosyasında (S6) video yoktur: ekran siyah kalır, ses ve göstergeler çalışır.
         let info = player.info
-        hdrHint = info.isHDR
-        frameDuration = info.frameRate > 0 ? 1 / info.frameRate : 1.0 / 24
-        maxCLL = info.maxCLL
+        hdrHint = info?.isHDR ?? false
+        let fps = info?.frameRate ?? 0
+        frameDuration = fps > 0 ? 1 / fps : 1.0 / 24
+        maxCLL = info?.maxCLL
         let key = Self.anchorPrefix + title
         anchorKey = key
         let cached = UserDefaults.standard.double(forKey: key)
-        let initialAnchor = cached > 0 ? cached : SceneWhiteEstimator.initialAnchor(maxFALL: info.maxFALL)
+        let initialAnchor = cached > 0 ? cached : SceneWhiteEstimator.initialAnchor(maxFALL: info?.maxFALL)
         sceneWhite = SceneWhiteEstimator(config: sceneWhiteConfig, initialAnchor: initialAnchor)
         lastAnchorSave = CACurrentMediaTime()
 
         // DV: Nit yolunda L1 okunur; P7 Referans'ta P8.1 olarak bildirilir (EL atılır, RPU dönüştürülür).
-        dovi = DoviRpuProcessor(info: info)
+        dovi = info.flatMap { DoviRpuProcessor(info: $0) }
         l1Validity = DolbyVisionL1Validity()
         sceneWhiteFromL1 = false
         loggedElType = nil
@@ -752,7 +767,7 @@ final class LabEngine: NSObject {
         var referenceNote = ""
         if let dovi {
             player.nitPacketObserver = { @Sendable packet in dovi.observe(packet) }
-            if let source = info.dovi, let config = DoviRpuProcessor.referenceConfig(for: source) {
+            if let source = info?.dovi, let config = DoviRpuProcessor.referenceConfig(for: source) {
                 player.referencePacketRewriter = { @Sendable packet in dovi.rewriteForReference(packet) }
                 player.setReferenceDovi(config)
                 referenceNote = " · Referans'ta \(config.label)"
@@ -772,17 +787,20 @@ final class LabEngine: NSObject {
         player.setAudioStage(stageSettings)
         boostMeters = BoostMeters()
         player.setBackground(UIApplication.shared.applicationState == .background)
+        loggedSignalPath = nil
+        loggedMD5 = nil
+        prepareSession(for: player, reason: "açılış")
         loggedDialogEngine = nil
         loggedIsolationReport = false
         surface.apply(.single(effectiveMode))
         updatePeakLockEnabled()
 
-        snapshot.isHDR = info.isHDR
-        snapshot.formatLabel = info.label + referenceNote + " · kendi hattımız"
+        snapshot.isHDR = info?.isHDR ?? false
+        snapshot.formatLabel = (info?.label ?? "Yalnızca ses") + referenceNote + " · kendi hattımız"
         if dovi?.decodesReshaping == true {
             event("DV P5: Nit'te IPTPQc2 kod çözümü (RPU şekillendirme + IPT → LMS → BT.2020)")
         }
-        event("Kendi hattımız: \(info.label)" + (info.maxCLL.map { " · MaxCLL \(Int($0))" } ?? "")
+        event("Kendi hattımız: \(info?.label ?? "yalnızca ses")" + (info?.maxCLL.map { " · MaxCLL \(Int($0))" } ?? "")
               + " · çapa \(TR.num(initialAnchor, 0)) nit")
         loggedAudioLabel = nil
         if let audio = player.audioInfo {
@@ -818,6 +836,141 @@ final class LabEngine: NSObject {
         if key != loggedAudioLabel {
             loggedAudioLabel = key
             event(status.label)
+        }
+    }
+
+    // MARK: S6 bit-perfect
+
+    /// Oturum kipi ve dosyanın örnekleme hızı (oynatma başlamadan önce). Donanım hızı ~0,5 s sonra yeniden okunur.
+    private func prepareSession(for player: NativePlayer, reason: String) {
+        let music: Bool
+        switch params.sessionMode {
+        case .automatic: music = player.info == nil || route == .usb
+        case .movie: music = false
+        case .music: music = true
+        }
+        // Dolby sıkıştırılmış akışları Apple 48 kHz'te çözer.
+        let codec = player.audioInfo?.codecID
+        let dolby = codec == AV_CODEC_ID_AC3 || codec == AV_CODEC_ID_EAC3
+        let rate = player.audioInfo.map { dolby ? 48000 : Double($0.sampleRate) }
+        audioSession.prepare(mode: music ? .default : .moviePlayback, sampleRate: rate)
+        let requested = rate.map { Self.kHz($0) } ?? "—"
+        event("Oturum (\(reason)): \(music ? "Müzik (.default)" : "Film (.moviePlayback)") · istenen \(requested) → donanım \(Self.kHz(audioSession.state.hardwareRate))"
+              + (audioSession.state.error.map { " · hata: \($0)" } ?? ""))
+        // Hız değişimi eşzamansız oturabilir: kısa süre sonra yeniden okunur ve sonuç kaydedilir.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.native === player else { return }
+                self.audioSession.refresh()
+                let hardware = self.audioSession.state.hardwareRate
+                if let rate, abs(hardware - rate) > 1 {
+                    self.event("Örnekleme hızı: istenen \(Self.kHz(rate)), donanım \(Self.kHz(hardware)) (rota \(self.route.rawValue) bu hıza geçmedi)")
+                }
+            }
+        }
+    }
+
+    static func kHz(_ rate: Double) -> String {
+        guard rate > 0 else { return "—" }
+        let k = rate / 1000
+        return (k.truncatingRemainder(dividingBy: 1) == 0 ? TR.num(k, 0) : TR.num(k, 1)) + " kHz"
+    }
+
+    /// Sinyal yolu (§5.6): kaynak → çözücü → (DSP) → iOS mikseri → çıkış, bit-perfect kararı ve nedenleri.
+    private func fillSignalPathSnapshot(now: CFTimeInterval) {
+        guard let native, let audio = native.audioStatus, let stream = native.audioInfo else {
+            snapshot.signalPath = nil
+            snapshot.signalPathLines = []
+            return
+        }
+        if now - lastSessionRefresh >= 1 {
+            lastSessionRefresh = now
+            audioSession.refresh()
+        }
+        let session = audioSession.state
+        let stage = native.audioStageStatus
+        var s = SignalPathStatus()
+        s.fileRate = audio.sampleRate
+        s.hardwareRate = session.hardwareRate
+        s.route = route.rawValue
+
+        let bits = audio.bitDepth > 0 && audio.path == .pcm ? "\(audio.bitDepth)/" : ""
+        let fileK = Double(audio.sampleRate) / 1000
+        var steps = ["Dosya \(bits)\(fileK.truncatingRemainder(dividingBy: 1) == 0 ? TR.num(fileK, 0) : TR.num(fileK, 1)) \(audio.codec)"]
+        let processing = stage?.settings.active == true
+        switch audio.path {
+        case .pcm: steps.append("FFmpeg (\(audio.outputFormat))")
+        case .atmos, .dolby: steps.append(processing ? "Apple çözücü (\(stage?.decodedLayout ?? "yatak"))" : "Apple (sıkıştırılmış)")
+        }
+        var dsp: [String] = []
+        if let stage, stage.settings.dialog.active { dsp.append("diyalog") }
+        if let stage, stage.settings.boost.active { dsp.append("boost +\(TR.num(stage.settings.boost.gainDB, 1)) dB") }
+        if !dsp.isEmpty { steps.append("DSP (" + dsp.joined(separator: ", ") + ")") }
+        steps.append("iOS mikseri @\(Self.kHz(session.hardwareRate))")
+        switch route {
+        case .usb: steps.append("USB DAC «\(session.routeName)» \(Self.kHz(session.hardwareRate))")
+        case .speaker: steps.append("hoparlör")
+        case .bluetooth: steps.append("\(session.routeName) (Bluetooth)")
+        case .headphones: steps.append("kulaklık çıkışı «\(session.routeName)»")
+        case .airPlay: steps.append("AirPlay «\(session.routeName)»")
+        case .other: steps.append(session.routeName)
+        }
+        s.path = steps.joined(separator: " → ")
+
+        // Karar: yalnızca kayıpsız kaynak + USB DAC'ta anlamlı.
+        var reasons: [String] = []
+        let losslessPCM = audio.path == .pcm && audio.lossless
+        if audio.path != .pcm { reasons.append("Dolby: Apple çözer") } else if !audio.lossless { reasons.append("kayıplı kaynak") }
+        reasons += dsp
+        if session.hardwareRate > 0, abs(session.hardwareRate - Double(audio.sampleRate)) > 1 {
+            reasons.append("hız uyuşmazlığı (dosya \(Self.kHz(Double(audio.sampleRate))), çıkış \(Self.kHz(session.hardwareRate)))")
+        }
+        if session.outputChannels > 0, stream.channels > session.outputChannels {
+            reasons.append("kanal indirgeme \(stream.channels) → \(session.outputChannels)")
+        }
+        if params.rendererVolumeTest { reasons.append("renderer volume 1,5") }
+        switch route {
+        case .speaker: reasons.append("hoparlör: sistem işlemesi")
+        case .bluetooth: reasons.append("Bluetooth: kayıplı kodlama")
+        case .airPlay: reasons.append("AirPlay")
+        case .headphones, .other: reasons.append("bu rotada doğrulanamaz")
+        case .usb: break
+        }
+        s.reasons = reasons
+        if route == .usb, losslessPCM { s.bitPerfect = reasons.isEmpty } else { s.bitPerfect = nil }
+        if session.outputVolume < 0.995 {
+            s.cautions.append("ses %\(Int((session.outputVolume * 100).rounded())): DAC'ın donanım seviyesi yoksa dijital azaltma [doğrulanmalı]")
+        }
+        if audio.path == .pcm, audio.lossless, audio.outputFormat == "float32" { s.cautions.append("float32 çıkış (≤ 24 bit kayıpsız)") }
+        if session.mode == "Film" { s.cautions.append("oturum Film (.moviePlayback)") }
+        switch audio.md5 {
+        case .unavailable: s.md5 = ""
+        case .running: s.md5 = "çalışıyor (dosya sonunda karşılaştırılır)"
+        case .invalidated(let why): s.md5 = "geçersiz: \(why)"
+        case .passed: s.md5 = "✓ STREAMINFO ile birebir"
+        case .failed: s.md5 = "✗ STREAMINFO'dan FARKLI"
+        }
+        snapshot.signalPath = s
+
+        var lines = [s.path, s.verdict + (s.cautions.isEmpty ? "" : " · " + s.cautions.joined(separator: " · "))]
+        if !s.md5.isEmpty {
+            lines.append(s.md5.hasPrefix("✓") ? "FLAC MD5 ✓ STREAMINFO ile birebir (çözülen PCM kaynakla aynı)"
+                         : s.md5.hasPrefix("✗") ? "FLAC MD5 ✗ STREAMINFO'dan farklı" : "FLAC MD5: \(s.md5)")
+        }
+        var detail = "oturum \(session.mode) · istenen \(session.requestedRate.map { Self.kHz($0) } ?? "—") → donanım \(Self.kHz(session.hardwareRate))"
+        detail += " · \(session.outputChannels) kanal · IO \(TR.num(session.ioBufferMs, 1)) ms · çıkış gecikmesi \(TR.num(session.outputLatencyMs, 0)) ms"
+        if let error = session.error { detail += " · hata: \(error)" }
+        lines.append(detail)
+        snapshot.signalPathLines = lines
+
+        let key = s.path + " · " + s.verdict
+        if key != loggedSignalPath {
+            loggedSignalPath = key
+            event("Sinyal yolu: \(key)")
+        }
+        if s.md5 != loggedMD5, !s.md5.isEmpty {
+            loggedMD5 = s.md5
+            event("FLAC MD5: \(s.md5)")
         }
     }
 
@@ -1153,6 +1306,6 @@ final class LabEngine: NSObject {
             referenceWhite: snapshot.referenceWhite, frameWhite: snapshot.frameWhite, sceneWhite: snapshot.sceneWhite,
             anchor: snapshot.anchor, histogramWhite: snapshot.histogramWhite, rpuMicros: snapshot.rpuMeanMicros,
             audioCPU: snapshot.audioCPUPercent, audioStage: snapshot.audioStage, boostMeters: snapshot.boostMeters,
-            route: route.rawValue, chromeVisible: chromeVisible, panel: panelName, event: event)
+            route: route.rawValue, signalPath: snapshot.signalPath, chromeVisible: chromeVisible, panel: panelName, event: event)
     }
 }

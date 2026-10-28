@@ -82,6 +82,12 @@ final class AudioStreamInfo: @unchecked Sendable {
     let language: String?
     let title: String?
     let parameters: UnsafeMutablePointer<AVCodecParameters>
+    /// Kaynağın gerçek bit derinliği (FLAC/ALAC/PCM'de 16/24/32); bilinmiyorsa 0.
+    let bitsPerSample: Int
+    /// Kayıpsız codec mi (FLAC, ALAC, PCM, TrueHD, WavPack…)? Bit-perfect yalnızca bunlarda anlamlıdır (S6).
+    let lossless: Bool
+    /// FLAC STREAMINFO'daki çözülmüş sesin MD5'i (kodlayıcı yazmadıysa `nil`): uygulama içi bit doğrulaması.
+    let flacMD5: Data?
 
     init?(stream: UnsafeMutablePointer<AVStream>) {
         guard let copy = avcodec_parameters_alloc() else { return nil }
@@ -97,6 +103,10 @@ final class AudioStreamInfo: @unchecked Sendable {
         sampleRate = Int(par.sample_rate)
         channels = Int(par.ch_layout.nb_channels)
         profile = par.profile
+        bitsPerSample = Int(par.bits_per_raw_sample > 0 ? par.bits_per_raw_sample : par.bits_per_coded_sample)
+        let props = avcodec_descriptor_get(par.codec_id)?.pointee.props ?? 0
+        lossless = props & AV_CODEC_PROP_LOSSLESS != 0 && props & AV_CODEC_PROP_LOSSY == 0
+        flacMD5 = Self.streamInfoMD5(par)
         func tag(_ key: String) -> String? {
             av_dict_get(stream.pointee.metadata, key, nil, 0).flatMap { $0.pointee.value.map { String(cString: $0) } }
         }
@@ -107,6 +117,17 @@ final class AudioStreamInfo: @unchecked Sendable {
     deinit {
         var p: UnsafeMutablePointer<AVCodecParameters>? = parameters
         avcodec_parameters_free(&p)
+    }
+
+    /// FLAC STREAMINFO (34 bayt; Matroska/Ogg'da başında "fLaC" + blok başlığı olabilir), MD5 bayt 18–33.
+    private static func streamInfoMD5(_ par: AVCodecParameters) -> Data? {
+        guard par.codec_id == AV_CODEC_ID_FLAC, let extra = par.extradata, par.extradata_size >= 34 else { return nil }
+        let size = Int(par.extradata_size)
+        let bytes = UnsafeBufferPointer(start: extra, count: size)
+        let base = size >= 42 && Array(bytes[0..<4]) == [0x66, 0x4C, 0x61, 0x43] ? 8 : 0
+        guard size >= base + 34 else { return nil }
+        let md5 = Data(bytes[(base + 18)..<(base + 34)])
+        return md5.allSatisfy { $0 == 0 } ? nil : md5
     }
 }
 
@@ -128,18 +149,21 @@ struct DemuxedPacket {
 enum DemuxError: LocalizedError {
     case open(String)
     case noVideo
+    case nothingPlayable
     case unsupportedCodec(String)
 
     var errorDescription: String? {
         switch self {
         case .open(let m): "Dosya açılamadı: \(m)"
         case .noVideo: "Dosyada video izi yok"
+        case .nothingPlayable: "Dosyada oynatılabilir video ya da ses izi yok"
         case .unsupportedCodec(let c): "Bu sürümde desteklenmeyen video codec'i: \(c) (S2'de HEVC ve H.264)"
         }
     }
 }
 
-/// libavformat ile demux (02-cozum §4.1): video akışı ve (varsa) en uygun ses akışı.
+/// libavformat ile demux (02-cozum §4.1): video akışı ve (varsa) en uygun ses akışı. Müzik dosyalarında (S6)
+/// video yoktur ya da yalnızca kapak resmi vardır: o zaman yalnızca ses okunur.
 /// Tek bir thread'den kullanılmalıdır (NativePlayer'ın demux thread'i).
 final class NativeDemuxer {
     private var context: UnsafeMutablePointer<AVFormatContext>?
@@ -147,8 +171,11 @@ final class NativeDemuxer {
     private let streamIndex: Int32
     private let audioIndex: Int32
     private let audioTimeBase: (num: Int32, den: Int32)
-    let info: VideoStreamInfo
+    /// Video akışı; yalnızca-ses dosyada `nil`.
+    let info: VideoStreamInfo?
     let audio: AudioStreamInfo?
+    /// Dosyanın süresi (s); bilinmiyorsa 0.
+    let duration: Double
 
     init(path: String) throws {
         // `opened` kapatma için isteğe bağlı kalır; `ctx` açık bağlamın kendisidir.
@@ -159,10 +186,11 @@ final class NativeDemuxer {
             avformat_close_input(&opened)
             throw DemuxError.open("akış bilgisi okunamadı")
         }
-        let index = av_find_best_stream(ctx, AVMEDIA_TYPE_VIDEO, -1, -1, nil, 0)
-        guard index >= 0, let stream = ctx.pointee.streams[Int(index)] else {
-            avformat_close_input(&opened)
-            throw DemuxError.noVideo
+        // Kapak resmi (attached picture) video sayılmaz: FLAC/M4A müzik dosyalarında sık görülür.
+        var index = av_find_best_stream(ctx, AVMEDIA_TYPE_VIDEO, -1, -1, nil, 0)
+        if index >= 0, let candidate = ctx.pointee.streams[Int(index)],
+           candidate.pointee.disposition & AV_DISPOSITION_ATTACHED_PIC != 0 {
+            index = -1
         }
         // Ses: videoyla ilişkili en iyi akış (S3). Diğer akışlar yok sayılır; paket okuma maliyeti düşer.
         let audioIndex = av_find_best_stream(ctx, AVMEDIA_TYPE_AUDIO, -1, index, nil, 0)
@@ -172,15 +200,24 @@ final class NativeDemuxer {
             audio = AudioStreamInfo(stream: audioStream)
             audioTimeBase = (audioStream.pointee.time_base.num, audioStream.pointee.time_base.den)
         }
+        guard index >= 0 || audio != nil else {
+            avformat_close_input(&opened)
+            throw DemuxError.nothingPlayable
+        }
         for i in 0..<Int(ctx.pointee.nb_streams) where i != Int(index) && (audio == nil || i != Int(audioIndex)) {
             ctx.pointee.streams[i]?.pointee.discard = AVDISCARD_ALL
         }
-        do {
-            info = try Self.makeInfo(stream: stream, context: ctx)
-        } catch {
-            avformat_close_input(&opened)
-            throw error
+        if index >= 0, let stream = ctx.pointee.streams[Int(index)] {
+            do {
+                info = try Self.makeInfo(stream: stream, context: ctx)
+            } catch {
+                avformat_close_input(&opened)
+                throw error
+            }
+        } else {
+            info = nil
         }
+        duration = ctx.pointee.duration > 0 ? Double(ctx.pointee.duration) / Double(arif_time_base()) : 0
         context = ctx
         streamIndex = index
         self.audio = audio
@@ -206,10 +243,10 @@ final class NativeDemuxer {
                   let bytes = packet.pointee.data else { continue }
             let size = Int(packet.pointee.size)
             let isAudio = index == audioIndex
-            let data = info.annexB && !isAudio
+            let data = info?.annexB == true && !isAudio
                 ? NALUnits.lengthPrefixed(fromAnnexB: UnsafeRawBufferPointer(start: bytes, count: size))
                 : Data(bytes: bytes, count: size)
-            let tb = isAudio ? audioTimeBase : info.timeBase
+            let tb = isAudio ? audioTimeBase : (info?.timeBase ?? (1, 1))
             let nopts = arif_nopts_value()
             let rawPTS = packet.pointee.pts != nopts ? packet.pointee.pts : packet.pointee.dts
             let rawDTS = packet.pointee.dts != nopts ? packet.pointee.dts : rawPTS

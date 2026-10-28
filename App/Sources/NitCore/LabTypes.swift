@@ -115,6 +115,9 @@ struct NitParams: Equatable {
     var boostSpeakerHighPass = true
     /// AS-37 (g): renderer `volume = 1,5` denemesi (yalnızca bilgi; tasarım buna dayanmaz).
     var rendererVolumeTest = false
+    /// S6 bit-perfect: kayıpsız kaynakta renderer'a tamsayı PCM (sonraki açılışta geçerli) ve oturum kipi.
+    var integerAudio = true
+    var sessionMode: AudioSessionController.ModeChoice = .automatic
 
     var boostSettings: BoostSettings {
         BoostSettings(percent: boostPercent, mode: limiterMode, aggressive: boostAggressive, keepAtmos: boostKeepAtmos,
@@ -148,6 +151,7 @@ struct NitParams: Equatable {
             + "sapma_stop=\(sceneDeviationStops); kesim_esigi=\(cutThreshold); olcekleyici=\(highQualityScaler ? "kaliteli" : "bilineer"); "
             + "motor=\(preferNativeEngine ? "kendi hattimiz" : "AVPlayer (MP4/MOV)"); \(dialogSettings.csv); \(boostSettings.csv)"
             + (rendererVolumeTest ? "; renderer_volume_testi=1,5" : "")
+            + "; tamsayi_pcm=\(integerAudio); oturum_kipi=\(sessionMode.rawValue)"
     }
 }
 
@@ -259,6 +263,9 @@ struct LabSnapshot {
     var audioStage: AudioStageStatus?
     var boostMeters: BoostMeters?
     var route: AudioRouteClass = .other
+    /// S6: sinyal yolu ve bit-perfect değerlendirmesi (yalnızca kendi hattımızda).
+    var signalPath: SignalPathStatus?
+    var signalPathLines: [String] = []
 
     /// P-2: çıkış hiçbir zaman sistemin o an verdiği headroom'u aşmaz.
     var p2OK: Bool { outputMax <= hCur + 1e-6 }

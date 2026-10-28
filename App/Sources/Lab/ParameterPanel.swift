@@ -106,6 +106,15 @@ struct ParameterPanel: View {
                 Button("Kırpma/GR göstergelerini sıfırla") { model.resetBoostMeters() }
                     .font(.subheadline)
 
+                group("Bit-perfect (M5, AS-11)")
+                Picker("Oturum", selection: $model.params.sessionMode) {
+                    ForEach(AudioSessionController.ModeChoice.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                Toggle("Kayıpsızda tamsayı PCM (sonraki açılışta)", isOn: $model.params.integerAudio).font(.subheadline).tint(DS.green)
+                Text("Otomatik: müzik dosyası ya da USB DAC'ta Müzik (.default), filmde Film (.moviePlayback). Dosya açılırken oturum dosyanın örnekleme hızını ister; HUD donanımın gerçekten geçip geçmediğini gösterir.")
+                    .font(.caption).foregroundStyle(DS.secondary)
+
                 group("SDR gaması")
                 Picker("Gama", selection: $model.params.sdrGamma) {
                     Text("2,2").tag(2.2)

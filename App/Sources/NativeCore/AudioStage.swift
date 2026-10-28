@@ -341,9 +341,11 @@ final class AudioStage: @unchecked Sendable {
             return .failed("biçim yok")
         }
         if asbd.mFormatID == kAudioFormatLinearPCM {
-            guard let pcm = NativeAudioPipeline.floatSamples(of: raw) else { return .failed("PCM biçimi beklenmedik") }
+            // Kayıpsız kaynak tamsayı gelebilir (S6); işlenen çıktı aynı düzende float32'dir.
+            guard let pcm = NativeAudioPipeline.floatSamples(of: raw),
+                  let output = NativeAudioPipeline.floatFormat(matching: format) else { return .failed("PCM biçimi beklenmedik") }
             return .pcm(PCM(samples: pcm.samples, frames: pcm.frames, pts: CMSampleBufferGetPresentationTimeStamp(raw),
-                            rate: asbd.mSampleRate, roles: Self.roles(of: format, channels: pcm.channels), format: format))
+                            rate: asbd.mSampleRate, roles: Self.roles(of: format, channels: pcm.channels), format: output))
         }
         // Sıkıştırılmış (AC-3 / E-AC-3, JOC dahil): Apple çözücüsüyle yatak kanallarına.
         switch decoder.decode(raw) {

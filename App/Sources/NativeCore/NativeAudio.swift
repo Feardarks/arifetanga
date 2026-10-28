@@ -1,5 +1,6 @@
 import AVFoundation
 import CoreMedia
+import CryptoKit
 import Foundation
 import MediaFormat
 
@@ -10,8 +11,17 @@ struct NativeAudioStatus: Equatable {
         case atmos
         /// AC-3 / E-AC-3 sıkıştırılmış olarak Apple'a.
         case dolby
-        /// FFmpeg → float32 PCM (TrueHD, DTS, FLAC, AAC…).
+        /// FFmpeg → PCM (TrueHD, DTS, FLAC, AAC…): kayıpsız kaynakta tamsayı, diğerlerinde float32.
         case pcm
+    }
+
+    /// FLAC STREAMINFO MD5 doğrulaması (S6): çözülen PCM, kodlayıcının yazdığı MD5'le birebir mi?
+    enum MD5Check: Equatable {
+        case unavailable
+        case running
+        case invalidated(String)
+        case passed
+        case failed
     }
 
     var codec: String
@@ -22,15 +32,22 @@ struct NativeAudioStatus: Equatable {
     var decodeCPUPercent: Double?
     var errors = 0
     var lastError: String?
+    /// Renderer'a giden örnek biçimi: "s16", "s32" (kayıpsız kaynak, S6) ya da "float32".
+    var outputFormat = "float32"
+    /// Kaynağın bit derinliği (bilinmiyorsa 0) ve kayıpsız olup olmadığı.
+    var bitDepth = 0
+    var lossless = false
+    var md5: MD5Check = .unavailable
 
     var label: String {
         var text = "Ses: \(codec) \(layout)"
         switch path {
         case .atmos: text += " → Apple (Dolby Atmos, sıkıştırılmış)"
         case .dolby: text += " → Apple (sıkıştırılmış)"
-        case .pcm: text += " → PCM float32"
+        case .pcm: text += " → PCM \(outputFormat)"
         }
-        if sampleRate > 0 { text += " · \(sampleRate / 1000) kHz" }
+        if bitDepth > 0, path == .pcm { text += " · \(bitDepth) bit" }
+        if sampleRate > 0 { text += " · \(TR.num(Double(sampleRate) / 1000, sampleRate % 1000 == 0 ? 0 : 1)) kHz" }
         if let cpu = decodeCPUPercent { text += " · çözme %\(TR.num(cpu, 1))" }
         if errors > 0 { text += " · hata \(errors)" }
         return text
@@ -66,14 +83,26 @@ final class NativeAudioPipeline {
     private var nextPTS: CMTime?
     private var cpuSeconds = 0.0
     private var mediaSeconds = 0.0
+    /// Kayıpsız kaynakta renderer'a kaynağın tamsayı biçimi verilir (S6, §5.6); mikserin int → float dönüşümü
+    /// Apple'ın kendi ölçeğiyle yapılır, bizim ölçeğimizle uyuşmazlık riski kalmaz.
+    private let integerOutput: Bool
+    private var hasher: Insecure.MD5?
+    private var hashedFrames = 0
 
-    init(stream: AudioStreamInfo) throws {
+    init(stream: AudioStreamInfo, integerOutput: Bool = true) throws {
         self.stream = stream
+        self.integerOutput = integerOutput
         let dolby = stream.codecID == AV_CODEC_ID_AC3 || stream.codecID == AV_CODEC_ID_EAC3
         mode = dolby ? .dolby : .decode
         let layout = SpeakerLayout.name(SpeakerLayout.defaultPositions(channelCount: stream.channels))
         status = NativeAudioStatus(codec: Self.codecLabel(stream), path: dolby ? .dolby : .pcm, layout: layout,
                                    sampleRate: stream.sampleRate)
+        status.bitDepth = stream.bitsPerSample
+        status.lossless = stream.lossless
+        if stream.flacMD5 != nil {
+            hasher = Insecure.MD5()
+            status.md5 = .running
+        }
         if !dolby { try openDecoder() }
     }
 
@@ -96,6 +125,16 @@ final class NativeAudioPipeline {
         packetizer.reset()
         nextPTS = nil
         if let codec { avcodec_flush_buffers(codec) }
+        // Sarmadan sonra akışın tamamı sırayla çözülmez: MD5 doğrulaması geçersizleşir (sonuç varsa korunur).
+        if status.md5 == .running { status.md5 = .invalidated("sarma ya da yol değişimi; baştan sona çal") }
+        hasher = nil
+    }
+
+    /// Dosya sonu: baştan sona kesintisiz çözüldüyse MD5 STREAMINFO ile karşılaştırılır.
+    func finishVerification() {
+        guard status.md5 == .running, let hasher, let expected = stream.flacMD5 else { return }
+        status.md5 = Data(hasher.finalize()) == expected ? .passed : .failed
+        self.hasher = nil
     }
 
     // MARK: Dolby
@@ -204,11 +243,15 @@ final class NativeAudioPipeline {
         if layout.order == AV_CHANNEL_ORDER_NATIVE || layout.order == AV_CHANNEL_ORDER_CUSTOM {
             for i in 0..<channels { ffChannels.append(av_channel_layout_channel_from_index(&layout, UInt32(i)).rawValue) }
         }
-        let key = [rate, channels] + ffChannels.map { Int($0) }
+        let planar = av_sample_fmt_is_planar(AVSampleFormat(rawValue: f.format)) != 0
+        let packed = av_get_packed_sample_fmt(AVSampleFormat(rawValue: f.format))
+        let kind: SampleKind = !integerOutput || !stream.lossless ? .float32
+            : packed == AV_SAMPLE_FMT_S16 ? .int16 : packed == AV_SAMPLE_FMT_S32 ? .int32 : .float32
+        let key = [rate, channels, kind.rawValue] + ffChannels.map { Int($0) }
         if key != pcmKey || pcmFormat == nil {
             let positions = ffChannels.isEmpty ? SpeakerLayout.defaultPositions(channelCount: channels)
                                                : SpeakerLayout.positions(ffmpegChannels: ffChannels)
-            guard let format = Self.pcmFormat(rate: rate, positions: positions) else {
+            guard let format = Self.pcmFormat(rate: rate, positions: positions, kind: kind) else {
                 fail("PCM biçim açıklaması kurulamadı (\(channels) kanal)")
                 return nil
             }
@@ -216,20 +259,42 @@ final class NativeAudioPipeline {
             pcmKey = key
             status.layout = SpeakerLayout.name(positions)
             status.sampleRate = rate
+            status.outputFormat = kind.label
         }
         guard let format = pcmFormat else { return nil }
 
-        var samples = [Float](repeating: 0, count: count * channels)
-        let planar = av_sample_fmt_is_planar(AVSampleFormat(rawValue: f.format)) != 0
-        let packed = av_get_packed_sample_fmt(AVSampleFormat(rawValue: f.format))
-        for c in 0..<channels {
-            guard let plane = planes[planar ? c : 0] else { return nil }
-            let stride = planar ? 1 : channels
-            let offset = planar ? 0 : c
-            for i in 0..<count {
-                samples[i * channels + c] = Self.sample(plane, index: i * stride + offset, format: packed)
+        // Karışık (interleaved) örnekler; tamsayıda kaynağın değerleri aynen kopyalanır.
+        let data: Data
+        switch kind {
+        case .int16, .int32:
+            let bytes = kind == .int16 ? 2 : 4
+            var out = Data(count: count * channels * bytes)
+            out.withUnsafeMutableBytes { raw in
+                guard let dst = raw.baseAddress else { return }
+                for c in 0..<channels {
+                    guard let plane = planes[planar ? c : 0] else { continue }
+                    let stride = planar ? 1 : channels
+                    let offset = planar ? 0 : c
+                    for i in 0..<count {
+                        (dst + (i * channels + c) * bytes).copyMemory(from: plane + (i * stride + offset) * bytes, byteCount: bytes)
+                    }
+                }
             }
+            data = out
+        case .float32:
+            var samples = [Float](repeating: 0, count: count * channels)
+            for c in 0..<channels {
+                guard let plane = planes[planar ? c : 0] else { return nil }
+                let stride = planar ? 1 : channels
+                let offset = planar ? 0 : c
+                for i in 0..<count {
+                    samples[i * channels + c] = Self.sample(plane, index: i * stride + offset, format: packed)
+                }
+            }
+            data = samples.withUnsafeBytes { Data($0) }
         }
+        hash(planes: planes, planar: planar, packed: packed, frames: count, channels: channels,
+             pts: f.best_effort_timestamp != arif_nopts_value() ? f.best_effort_timestamp : f.pts)
 
         let ptsMicros = f.best_effort_timestamp != arif_nopts_value() ? f.best_effort_timestamp : f.pts
         let pts = ptsMicros != arif_nopts_value() ? CMTime(value: ptsMicros, timescale: 1_000_000)
@@ -238,25 +303,98 @@ final class NativeAudioPipeline {
         mediaSeconds += Double(count) / Double(rate)
         if mediaSeconds > 0 { status.decodeCPUPercent = cpuSeconds / mediaSeconds * 100 }
 
-        return Self.pcmSampleBuffer(samples, frames: count, format: format, pts: pts)
+        return Self.pcmSampleBuffer(data: data, frames: count, format: format, pts: pts)
     }
 
-    /// float32 karışık PCM örneğinin örnekleri; başka biçimdeyse `nil`.
-    static func floatSamples(of sample: CMSampleBuffer) -> (samples: [Float], frames: Int, channels: Int)? {
+    /// FLAC MD5 (STREAMINFO): karışık, küçük sonlu, (bit+7)/8 baytlık işaretli örnekler. FFmpeg 24 biti s32'de
+    /// sola yaslı verir; sağa kaydırılarak kaynak değer bulunur. Akış baştan başlamadıysa doğrulama geçersizdir.
+    private func hash(planes: UnsafeMutablePointer<UnsafeMutablePointer<UInt8>?>, planar: Bool, packed: AVSampleFormat,
+                      frames: Int, channels: Int, pts: Int64) {
+        guard status.md5 == .running, hasher != nil else { return }
+        if hashedFrames == 0, pts != arif_nopts_value(), pts > 1000 {
+            status.md5 = .invalidated("baştan çalınmadı")
+            hasher = nil
+            return
+        }
+        let bits = stream.bitsPerSample
+        guard bits > 0, packed == AV_SAMPLE_FMT_S16 || packed == AV_SAMPLE_FMT_S32 else {
+            status.md5 = .unavailable
+            hasher = nil
+            return
+        }
+        let container = packed == AV_SAMPLE_FMT_S16 ? 16 : 32
+        let shift = container - bits
+        let width = (bits + 7) / 8
+        var bytes = [UInt8](repeating: 0, count: frames * channels * width)
+        var k = 0
+        for i in 0..<frames {
+            for c in 0..<channels {
+                guard let plane = planes[planar ? c : 0] else { return }
+                let index = planar ? i : i * channels + c
+                let raw = UnsafeRawPointer(plane)
+                let value = container == 16 ? Int32(raw.load(fromByteOffset: index * 2, as: Int16.self)) >> shift
+                                             : raw.load(fromByteOffset: index * 4, as: Int32.self) >> shift
+                for b in 0..<width { bytes[k + b] = UInt8(truncatingIfNeeded: value >> (8 * b)) }
+                k += width
+            }
+        }
+        bytes.withUnsafeBytes { hasher?.update(bufferPointer: $0) }
+        hashedFrames += frames
+    }
+
+    /// Karışık PCM örneğinin örnekleri float olarak (float32; tamsayı s16/s32 ölçeklenir: /2^15, /2^31).
+    /// Başka biçimdeyse `nil`. `isFloat`: kaynak örnek float32 mü (değilse çıktı için `floatFormat(matching:)`).
+    static func floatSamples(of sample: CMSampleBuffer) -> (samples: [Float], frames: Int, channels: Int, isFloat: Bool)? {
         guard let format = CMSampleBufferGetFormatDescription(sample),
               let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee,
-              asbd.mFormatID == kAudioFormatLinearPCM, asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0,
-              asbd.mBitsPerChannel == 32, asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved == 0,
+              asbd.mFormatID == kAudioFormatLinearPCM, asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved == 0,
               let block = CMSampleBufferGetDataBuffer(sample) else { return nil }
+        let isFloat = asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0
+        let bits = Int(asbd.mBitsPerChannel)
+        guard (isFloat && bits == 32) || (!isFloat && asbd.mFormatFlags & kAudioFormatFlagIsSignedInteger != 0 && (bits == 16 || bits == 32))
+        else { return nil }
         let channels = Int(asbd.mChannelsPerFrame)
         let frames = CMSampleBufferGetNumSamples(sample)
-        var samples = [Float](repeating: 0, count: frames * channels)
-        let status = samples.withUnsafeMutableBytes { bytes -> OSStatus in
+        let count = frames * channels
+        var raw = Data(count: count * bits / 8)
+        let status = raw.withUnsafeMutableBytes { bytes -> OSStatus in
             guard let base = bytes.baseAddress else { return -1 }
             return CMBlockBufferCopyDataBytes(block, atOffset: 0, dataLength: min(bytes.count, CMBlockBufferGetDataLength(block)),
                                               destination: base)
         }
-        return status == kCMBlockBufferNoErr ? (samples, frames, channels) : nil
+        guard status == kCMBlockBufferNoErr else { return nil }
+        var samples = [Float](repeating: 0, count: count)
+        raw.withUnsafeBytes { bytes in
+            for i in 0..<count {
+                if isFloat {
+                    samples[i] = bytes.load(fromByteOffset: i * 4, as: Float.self)
+                } else if bits == 16 {
+                    samples[i] = Float(bytes.load(fromByteOffset: i * 2, as: Int16.self)) / 32768
+                } else {
+                    samples[i] = Float(Double(bytes.load(fromByteOffset: i * 4, as: Int32.self)) / 2_147_483_648)
+                }
+            }
+        }
+        return (samples, frames, channels, isFloat)
+    }
+
+    /// Aynı hız ve kanal düzeninde float32 karışık PCM biçimi (tamsayı kaynak işlendikten sonra).
+    static func floatFormat(matching format: CMAudioFormatDescription) -> CMAudioFormatDescription? {
+        guard var asbd = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee else { return nil }
+        if asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0, asbd.mBitsPerChannel == 32 { return format }
+        let channels = asbd.mChannelsPerFrame
+        asbd.mFormatFlags = kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked
+        asbd.mBitsPerChannel = 32
+        asbd.mBytesPerFrame = 4 * channels
+        asbd.mBytesPerPacket = 4 * channels
+        asbd.mFramesPerPacket = 1
+        var size = 0
+        let layout = CMAudioFormatDescriptionGetChannelLayout(format, sizeOut: &size)
+        var out: CMAudioFormatDescription?
+        let status = CMAudioFormatDescriptionCreate(allocator: kCFAllocatorDefault, asbd: &asbd, layoutSize: layout == nil ? 0 : size,
+                                                    layout: layout, magicCookieSize: 0, magicCookie: nil, extensions: nil,
+                                                    formatDescriptionOut: &out)
+        return status == noErr ? out : nil
     }
 
     /// Yeniden işlemede eski (flush'la atılan) ve yeni yolun çıktılarını `start`'tan itibaren `seconds` boyunca
@@ -272,7 +410,8 @@ final class NativeAudioPipeline {
             guard let partner = old.first(where: { CMSampleBufferGetPresentationTimeStamp($0) == pts }),
                   let a = floatSamples(of: partner), let b = floatSamples(of: new[i]),
                   a.channels == b.channels, a.frames == b.frames,
-                  let format = CMSampleBufferGetFormatDescription(new[i]),
+                  let source = CMSampleBufferGetFormatDescription(new[i]),
+                  let format = floatFormat(matching: source),
                   let rate = CMAudioFormatDescriptionGetStreamBasicDescription(format)?.pointee.mSampleRate else { continue }
             var out = b.samples
             for f in 0..<b.frames {
@@ -293,7 +432,10 @@ final class NativeAudioPipeline {
 
     /// float32 karışık PCM örneği (ses evresi de kullanır).
     static func pcmSampleBuffer(_ samples: [Float], frames: Int, format: CMAudioFormatDescription, pts: CMTime) -> CMSampleBuffer? {
-        let data = samples.withUnsafeBytes { Data($0) }
+        pcmSampleBuffer(data: samples.withUnsafeBytes { Data($0) }, frames: frames, format: format, pts: pts)
+    }
+
+    static func pcmSampleBuffer(data: Data, frames: Int, format: CMAudioFormatDescription, pts: CMTime) -> CMSampleBuffer? {
         guard let block = blockBuffer(data) else { return nil }
         var sample: CMSampleBuffer?
         let result = CMAudioSampleBufferCreateReadyWithPacketDescriptions(
@@ -315,14 +457,32 @@ final class NativeAudioPipeline {
         }
     }
 
-    /// float32 karışık PCM; kanal düzeni açık kanal tanımlarıyla.
-    static func pcmFormat(rate: Int, positions: [SpeakerPosition]) -> CMAudioFormatDescription? {
+    /// Renderer'a giden PCM örnek türü.
+    enum SampleKind: Int {
+        case float32 = 0
+        case int16 = 1
+        case int32 = 2
+
+        var label: String {
+            switch self {
+            case .float32: "float32"
+            case .int16: "s16"
+            case .int32: "s32"
+            }
+        }
+    }
+
+    /// Karışık PCM; kanal düzeni açık kanal tanımlarıyla.
+    static func pcmFormat(rate: Int, positions: [SpeakerPosition], kind: SampleKind = .float32) -> CMAudioFormatDescription? {
         let channels = positions.count
+        let bytes = kind == .int16 ? 2 : 4
+        let flags = kind == .float32 ? kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked
+                                     : kAudioFormatFlagIsSignedInteger | kAudioFormatFlagIsPacked
         var asbd = AudioStreamBasicDescription(
             mSampleRate: Float64(rate), mFormatID: kAudioFormatLinearPCM,
-            mFormatFlags: kAudioFormatFlagIsFloat | kAudioFormatFlagIsPacked,
-            mBytesPerPacket: UInt32(4 * channels), mFramesPerPacket: 1, mBytesPerFrame: UInt32(4 * channels),
-            mChannelsPerFrame: UInt32(channels), mBitsPerChannel: 32, mReserved: 0)
+            mFormatFlags: flags,
+            mBytesPerPacket: UInt32(bytes * channels), mFramesPerPacket: 1, mBytesPerFrame: UInt32(bytes * channels),
+            mChannelsPerFrame: UInt32(channels), mBitsPerChannel: UInt32(8 * bytes), mReserved: 0)
         let headerSize = MemoryLayout<AudioChannelLayout>.offset(of: \AudioChannelLayout.mChannelDescriptions) ?? 12
         let size = headerSize + channels * MemoryLayout<AudioChannelDescription>.stride
         let raw = UnsafeMutableRawPointer.allocate(byteCount: max(size, MemoryLayout<AudioChannelLayout>.size),

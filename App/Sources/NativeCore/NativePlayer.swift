@@ -17,7 +17,10 @@ final class NativePlayer: @unchecked Sendable {
         case reference
     }
 
-    let info: VideoStreamInfo
+    /// Video akışı; müzik dosyasında (yalnızca ses, S6) `nil`.
+    let info: VideoStreamInfo?
+    /// Dosyanın süresi (s).
+    let duration: Double
     let audioInfo: AudioStreamInfo?
     /// Ses akışı var ama çözücü açılamadıysa nedeni.
     let audioOpenError: String?
@@ -35,8 +38,8 @@ final class NativePlayer: @unchecked Sendable {
     var nitPacketObserver: ((DemuxedPacket) -> Void)?
 
     private let demuxer: NativeDemuxer
-    private let nitFormat: CMVideoFormatDescription
-    private var referenceFormat: CMVideoFormatDescription
+    private let nitFormat: CMVideoFormatDescription?
+    private var referenceFormat: CMVideoFormatDescription?
     private var decoder: NativeVideoDecoder?
     private var videoRenderer: AVSampleBufferVideoRenderer?
     private let audioRenderer: AVSampleBufferAudioRenderer
@@ -76,6 +79,8 @@ final class NativePlayer: @unchecked Sendable {
     private var flushWaiting: (generation: Int, time: CMTime, began: CFTimeInterval)?
     private var backgroundApplied = false
     private var drained = false
+    /// Son açılış/sarmadan beri renderer'a giren ilk ses örneğinin PTS'i (videosuz saat başlangıcı).
+    private var firstAudioPTS: Double?
     /// Son sarma hedefi: bundan önceki ses yalnızca ısınmadır, çalınmaz.
     private var audioFloor: CMTime = .zero
     private var audioEnqueuedUntil: CMTime?
@@ -106,24 +111,32 @@ final class NativePlayer: @unchecked Sendable {
     private static let reprocessWarmup = 1.5
     private static let historySeconds = 12.0
 
+    /// - Parameter integerAudio: Kayıpsız kaynakta renderer'a tamsayı PCM (S6, bit-perfect yolu).
     init(path: String, output: Output, synchronizer: AVSampleBufferRenderSynchronizer,
-         audioRenderer: AVSampleBufferAudioRenderer) throws {
+         audioRenderer: AVSampleBufferAudioRenderer, integerAudio: Bool = true) throws {
         let demuxer = try NativeDemuxer(path: path)
-        guard let nitFormat = FormatDescriptions.make(demuxer.info, forReference: false),
-              let referenceFormat = FormatDescriptions.make(demuxer.info, forReference: true) else {
-            throw DemuxError.open("format açıklaması oluşturulamadı")
+        var nitFormat: CMVideoFormatDescription?
+        var referenceFormat: CMVideoFormatDescription?
+        if let video = demuxer.info {
+            guard let nit = FormatDescriptions.make(video, forReference: false),
+                  let reference = FormatDescriptions.make(video, forReference: true) else {
+                throw DemuxError.open("format açıklaması oluşturulamadı")
+            }
+            nitFormat = nit
+            referenceFormat = reference
         }
         var pipeline: NativeAudioPipeline?
         var audioError: String?
         if let stream = demuxer.audio {
             do {
-                pipeline = try NativeAudioPipeline(stream: stream)
+                pipeline = try NativeAudioPipeline(stream: stream, integerOutput: integerAudio)
             } catch {
                 audioError = error.localizedDescription
             }
         }
         self.demuxer = demuxer
         self.info = demuxer.info
+        self.duration = demuxer.info?.duration ?? demuxer.duration
         self.audioInfo = demuxer.audio
         self.audioOpenError = audioError
         self.audio = pipeline
@@ -146,7 +159,7 @@ final class NativePlayer: @unchecked Sendable {
 
     /// P7 → P8.1 dönüşümünde Referans format açıklaması değişir (S2.3).
     func setReferenceDovi(_ config: DoviConfig) {
-        guard let format = FormatDescriptions.make(info, forReference: true, doviOverride: config) else { return }
+        guard let info, let format = FormatDescriptions.make(info, forReference: true, doviOverride: config) else { return }
         lock.lock()
         referenceFormat = format
         lock.unlock()
@@ -348,6 +361,13 @@ final class NativePlayer: @unchecked Sendable {
                     route(packet, background: background)
                 } else {
                     endOfFile = true
+                    // FLAC: baştan sona kesintisiz çözüldüyse STREAMINFO MD5'i karşılaştırılır (S6).
+                    if let audio {
+                        audio.finishVerification()
+                        lock.lock()
+                        audioStatusValue = audio.status
+                        lock.unlock()
+                    }
                 }
                 worked = true
             }
@@ -396,6 +416,8 @@ final class NativePlayer: @unchecked Sendable {
             guard let audio else { return }
             for sample in audio.process(packet) {
                 let pts = CMSampleBufferGetPresentationTimeStamp(sample)
+                // Yalnızca-ses dosyada döngü sonu sesten belirlenir.
+                if info == nil, pts.isValid { endTime = max(endTime, Self.end(of: sample).seconds) }
                 if let skip = audioSkipUntil {
                     // 1 ms pay: tam sınırdaki örnek atılmaz.
                     if pts.isValid, (pts + CMTime(value: 1, timescale: 1000)) < skip { continue }
@@ -411,7 +433,8 @@ final class NativePlayer: @unchecked Sendable {
 
     /// Bir video paketini etkin yola verir. `false`: yol şu an dolu, paket sırada kalır.
     private func feedVideo(_ packet: DemuxedPacket, output: Output, renderer: AVSampleBufferVideoRenderer?,
-                           referenceFormat: CMVideoFormatDescription) -> Bool {
+                           referenceFormat: CMVideoFormatDescription?) -> Bool {
+        guard let info, let nitFormat, let referenceFormat else { return true }
         // TS'de akış GOP ortasından başlayabilir; anahtar karesi hiç işaretlenmemiş dosyalar için sınır var.
         if awaitingKeyframe, !packet.keyframe, skippedBeforeKeyframe < 600 {
             skippedBeforeKeyframe += 1
@@ -464,8 +487,9 @@ final class NativePlayer: @unchecked Sendable {
         lock.unlock()
         guard !started else { return }
         let videoStart: Double?
-        if background {
-            videoStart = clockStart ?? audioEnqueuedUntil?.seconds
+        if background || info == nil {
+            // Ekran yok ya da video yok: saat ilk ses örneğiyle başlar.
+            videoStart = clockStart ?? firstAudioPTS
         } else {
             switch output {
             case .nit: videoStart = frames.firstPTS
@@ -510,6 +534,7 @@ final class NativePlayer: @unchecked Sendable {
             audioHistory.removeAll()
             enqueuedSpans.removeAll()
             audioEnqueuedUntil = nil
+            firstAudioPTS = nil
             drained = false
             let time = CMTime(seconds: target, preferredTimescale: 90_000)
             audioFloor = time
@@ -544,6 +569,7 @@ final class NativePlayer: @unchecked Sendable {
         let end = Self.end(of: sample)
         audioEnqueuedUntil = end
         enqueuedSpans.append((CMSampleBufferGetPresentationTimeStamp(sample), end, sample))
+        if firstAudioPTS == nil { firstAudioPTS = CMSampleBufferGetPresentationTimeStamp(sample).seconds }
         if enqueuedSpans.count > 512 {
             let horizon = CMTime(seconds: mediaTime - 2, preferredTimescale: 90_000)
             enqueuedSpans.removeAll { $0.end < horizon }

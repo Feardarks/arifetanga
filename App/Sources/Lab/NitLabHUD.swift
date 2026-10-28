@@ -45,6 +45,10 @@ struct NitLabHUD: View {
                     if let audio = snapshot.audioSummary {
                         line(audio, color: DS.secondary)
                     }
+                    ForEach(Array(snapshot.signalPathLines.enumerated()), id: \.offset) { _, text in
+                        line(text, color: text.hasPrefix("Bit-perfect ✓") || text.hasPrefix("FLAC MD5 ✓") ? DS.green
+                                          : text.hasPrefix("Bit-perfect değil") || text.hasPrefix("FLAC MD5 ✗") ? DS.amber : DS.secondary)
+                    }
                     ForEach(Array(snapshot.audioStageLines.enumerated()), id: \.offset) { _, text in
                         line(text, color: text.hasPrefix("● KIRPMA") ? DS.red : DS.secondary)
                     }

@@ -38,6 +38,8 @@ final class Telemetry {
         var audioStage: AudioStageStatus?
         var boostMeters: BoostMeters?
         var route: String
+        /// S6: sinyal yolu, bit-perfect ve FLAC MD5.
+        var signalPath: SignalPathStatus?
         var chromeVisible: Bool
         var panel: String
         var event: String
@@ -70,7 +72,8 @@ final class Telemetry {
         out += "diyalog,diyalog_motor,diyalog_r,diyalog_c_db,diyalog_evre_cpu_yuzde,au_cpu_yuzde,au_duvar_yuzde,au_blok_maks_ms,"
         out += "au_gecikme_ms,au_olculen_ms,sa_muzik,sa_sarki,sa_konusma,"
         out += "rota,boost_yuzde,limiter,tavan_dbtp,boost_hedef_db,boost_etkin_db,gr_db,gr_tepe_1s_db,gr_3db_ustu_oran,"
-        out += "kirpma_led,kirpma_toplam,kirpma_1s,en_buyuk_tepe_dbfs,tp_asim,chromeVisible,panel,olay\n"
+        out += "kirpma_led,kirpma_toplam,kirpma_1s,en_buyuk_tepe_dbfs,tp_asim,"
+        out += "dosya_hz,donanim_hz,bit_perfect,bp_neden,flac_md5,chromeVisible,panel,olay\n"
         func f(_ v: Double, _ d: Int = 4) -> String { String(format: "%.\(d)f", v) }
         func q(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
         func o(_ v: Double?) -> String { v.map { f($0, 1) } ?? "" }
@@ -83,6 +86,10 @@ final class Telemetry {
                 .joined(separator: ",")
             out += "," + Self.dialogColumns(r.audioStage, f).joined(separator: ",")
             out += "," + Self.boostColumns(r.audioStage, r.boostMeters, route: r.route, f).joined(separator: ",")
+            let path = r.signalPath
+            out += "," + [path.map { String($0.fileRate) } ?? "", path.map { f($0.hardwareRate, 0) } ?? "",
+                          path?.bitPerfect.map { $0 ? "1" : "0" } ?? "", q(path?.reasons.joined(separator: "; ") ?? ""),
+                          q(path?.md5 ?? "")].joined(separator: ",")
             out += "," + [r.chromeVisible ? "1" : "0", r.panel, q(r.event)].joined(separator: ",")
             out += "\n"
         }
