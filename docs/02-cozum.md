@@ -1763,6 +1763,14 @@ Packages/DesignSystem/{Package.swift, Sources/DSCore/*, Sources/DesignSystem/{To
 > - **Rota:** Sınıf `AVAudioSession.currentRoute`'tan (hoparlör, kulaklık, Bluetooth, AirPlay, USB, diğer); Bluetooth'ta tavan −1,5 dBTP, hoparlörde 150 Hz HPF. Boost rota sınıfı başına hatırlanır; yeni rotanın kaydı yoksa %100. İçerik bazında hatırlama yok.
 > - **AS-37 g:** Laboratuvarda renderer `volume = 1,5` denemesi ve "Ham" kip; okunan değer CSV'ye yazılır. Tasarım bunlara dayanmaz.
 
+> **Uygulama notu: S6 v0.10 (M5 bit-perfect, AS-11).** Hedef yapıdan (§5.6) sapan ya da ona eklenen noktalar:
+> - **Müzik dosyaları:** FFmpeg'e FLAC/WAV/W64/AIFF/CAF/MP3/Ogg/WavPack/APE çözümleyicileri eklendi; kapak resmi (attached picture) video sayılmaz. Oynatıcı videosuz çalışır (saat ilk ses örneğiyle başlar). Müzik arayüzü, çalma listesi ve gapless yok; dosyalar laboratuvar ekranında çalar.
+> - **Oturum:** iOS 27'nin async `activate` API'si yerine (derleme SDK'sı 26.5) `setPreferredSampleRate` + `setActive(true)`; donanım hızı ~0,6 s sonra yeniden okunur. Kip "Otomatik": müzik dosyası ya da USB DAC rotasında `.default`, filmde `.moviePlayback`. Dolby sıkıştırılmış akışta 48 kHz istenir.
+> - **Tamsayı PCM:** Kayıpsız codec'te (FFmpeg `AV_CODEC_PROP_LOSSLESS`, kayıplı değil) renderer'a FFmpeg'in tamsayı biçimi aynen verilir: s16 ya da s32 (24 bit sola yaslı). Mikserin int → float dönüşümü Apple'ın kendi ölçeğiyle yapılır. Kayıplı codec'ler float32 kalır. Ses evresi (M9/M10) açıkken çıktı float32'dir; bit-perfect zaten bozulur.
+> - **Uygulama içi doğrulama:** FLAC STREAMINFO MD5, baştan sona kesintisiz çözülen PCM'den hesaplanıp dosya sonunda karşılaştırılır (yerelde ffmpeg ile doğrulandı). Bu, renderer'a kadar olan yolun birebirliğini kanıtlar; renderer sonrası (mikser, USB) için loopback gerekir.
+> - **Karar:** Yalnızca kayıpsız kaynak + USB DAC rotasında verilir. Bozan nedenler: Dolby, kayıplı kaynak, diyalog/boost, donanım hızı ≠ dosya hızı, kanal indirgeme, renderer volume testi. Uyarılar (kesin değil): ses seviyesi %100 değil (DAC donanım seviyesi bilinmiyor), float32 çıkış, Film kipi.
+> - **Loopback:** `tools/bit-perfect-karsilastir.py` iki dosyayı ffmpeg ile s32le'ye çözer, kaynağın ilk sessiz olmayan 64 karesini kayıtta birebir arayarak hizalar (ters polarite dahil) ve örtüşen bölümü bit bit karşılaştırır.
+
 ### 10.3 AS-37: Boost ve limiter (M10)
 
 | Senaryo | Ölçüt |
