@@ -246,7 +246,7 @@ final class NativeDemuxer {
             let data = info?.annexB == true && !isAudio
                 ? NALUnits.lengthPrefixed(fromAnnexB: UnsafeRawBufferPointer(start: bytes, count: size))
                 : Data(bytes: bytes, count: size)
-            let tb = isAudio ? audioTimeBase : (info?.timeBase ?? (1, 1))
+            let tb: (num: Int32, den: Int32) = isAudio ? audioTimeBase : (info?.timeBase ?? (num: 1, den: 1))
             let nopts = arif_nopts_value()
             let rawPTS = packet.pointee.pts != nopts ? packet.pointee.pts : packet.pointee.dts
             let rawDTS = packet.pointee.dts != nopts ? packet.pointee.dts : rawPTS
