@@ -40,13 +40,14 @@ jobs:
           PAC=$(command -v dkp-pacman || command -v pacman)
           CONF=/opt/devkitpro/pacman/etc/pacman.conf
           [ -f "$CONF" ] || CONF=/etc/pacman.conf
-          if ! grep -Fxq "[thepixellizeross-lib]" "$CONF"; then
-            printf '\n[thepixellizeross-lib]\nServer = https://thepixellizeross.gitlab.io/packages/any\nSigLevel = Optional\n' >> "$CONF"
-          fi
-          if ! grep -Fxq "[thepixellizeross-linux]" "$CONF"; then
-            printf '\n[thepixellizeross-linux]\nServer = https://thepixellizeross.gitlab.io/packages/x86_64/linux\nSigLevel = Optional\n' >> "$CONF"
-          fi
-          "$PAC" -Sy --noconfirm libctrpf 3gxtool
+          # pkg.devkitpro.org CI'dan senkronizasyonu reddediyor (403); toolchain
+          # imajda zaten kurulu. Sadece ThePixellizerOSS depolarıyla ayrı bir
+          # yapılandırma kullan.
+          sed '/^\[dkp-/,/^$/d' "$CONF" > /tmp/ctrpf-pacman.conf
+          printf '\n[thepixellizeross-lib]\nServer = https://thepixellizeross.gitlab.io/packages/any\nSigLevel = Optional\n' >> /tmp/ctrpf-pacman.conf
+          printf '\n[thepixellizeross-linux]\nServer = https://thepixellizeross.gitlab.io/packages/x86_64/linux\nSigLevel = Optional\n' >> /tmp/ctrpf-pacman.conf
+          grep -n '^\[' /tmp/ctrpf-pacman.conf
+          "$PAC" --config /tmp/ctrpf-pacman.conf -Sy --noconfirm --needed libctrpf 3gxtool
 
       - name: Derle
         run: make
