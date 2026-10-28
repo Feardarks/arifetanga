@@ -85,6 +85,11 @@ Dosyaları iPhone'a **Dosyalar** uygulaması (iCloud Drive, "iPhone'umda" ya da 
 
 ## 4. Test protokolü (sırayla)
 
+> **Senin ekipmanın: iPhone 11 Pro (iOS 27.0.1) + AirPods Max (Bluetooth), USB DAC yok.**
+> - **T27 ve T29 atlanır:** USB DAC ya da dijital çıkış gerektirir. **T28 yapılır:** FLAC MD5 doğrulaması uygulamanın içinde, DAC'sız çalışır.
+> - Bluetooth'ta iOS sesi AAC'ye yeniden kodlar; hiçbir uygulama bu rotada bit-perfect olamaz. HUD bu yüzden `Bit-perfect: — (… · Bluetooth: kayıplı kodlama)` yazar.
+> - AirPods Max için öncelikli testler: **T17** (Atmos ve baş takibi), **T18** (7.1 kanal yerleşimi), **T19** (dudak senkronu; Bluetooth gecikmesi), **T22**, **T23–T26** (Bluetooth'ta limiter tavanı −1,5 dBTP; kulaklığa geçince boost %100'e döner) ve **T31** (SMB'den 2 saat).
+
 | # | Test | Nasıl | Ne kaydedilir |
 |---|---|---|---|
 | T1 | **Headroom tablosu (K2)** | Tepe Kilidi **kapalı**. SDR dosyası oynarken parlaklık kaydırıcısını sırayla %25, %50, %75 ve %100'e getir; her birinde 10 sn bekle. | HUD'daki `H_cur` ve `H_pot`. CSV'de de var. |
