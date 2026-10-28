@@ -49,7 +49,7 @@ jobs:
           grep -n '^\[' /tmp/ctrpf-pacman.conf
           "$PAC" --config /tmp/ctrpf-pacman.conf -Sy --noconfirm --needed libctrpf 3gxtool
           echo "DEVKITPRO=$DEVKITPRO"
-          "$PAC" --config /tmp/ctrpf-pacman.conf -Ql libctrpf | grep -v '/CTRPluginFramework.*/.' | head -40
+          "$PAC" --config /tmp/ctrpf-pacman.conf -Ql libctrpf | grep -E 'types\.h|csvc\.h|plgldr\.h|include/[^/]+/?$' | head -40
 
       - name: Derle
         run: make
