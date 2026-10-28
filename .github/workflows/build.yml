@@ -58,3 +58,27 @@ jobs:
           name: kafatakip-plugin
           path: plugin/KafaTakip.3gx
           if-no-files-found: error
+
+  # master'a her push'ta dosyalar sabit "son" sürümüne konur; Release dosyaları
+  # Artifacts'ın aksine GitHub'a giriş yapmadan ve zip'siz indirilebilir.
+  release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: [kafatakip, plugin]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      - name: "\"son\" surumunu guncelle"
+        run: |
+          gh release delete son --cleanup-tag --yes || true
+          gh release create son --target "$GITHUB_SHA" --prerelease \
+            --title "Son derleme" \
+            --notes "master'daki son derleme (commit ${GITHUB_SHA::7}). kafatakip.3dsx: /3ds/ klasorune. KafaTakip.3gx: /luma/plugins/default.3gx olarak." \
+            dist/kafatakip/kafatakip.3dsx dist/kafatakip-plugin/KafaTakip.3gx
