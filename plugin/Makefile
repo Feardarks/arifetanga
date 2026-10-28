@@ -14,12 +14,13 @@ include $(DEVKITARM)/3ds_rules
 
 CTRPFLIB	?=	$(DEVKITPRO)/libctrpf
 
-TARGET		:=	KafaTakip
-BUILD		:=	build
+# Test sürümü: make TARGET=KafaTakipTest BUILD=build-test DEFINES=-DKAFATAKIP_MINIMAL
+TARGET		?=	KafaTakip
+BUILD		?=	build
 SOURCES		:=	Sources ../common
 DATA		:=	../common/data
 INCLUDES	:=	Includes Sources ../common
-PSF		:=	$(TARGET).plgInfo
+PSF		:=	KafaTakip.plgInfo
 
 #---------------------------------------------------------------------------------
 # options for code generation
@@ -30,7 +31,7 @@ CFLAGS		:=	-O2 -Wall -mword-relocations \
 			-ffunction-sections -fdata-sections -fno-strict-aliasing \
 			$(ARCH)
 
-CFLAGS		+=	$(INCLUDE) -D__3DS__
+CFLAGS		+=	$(INCLUDE) -D__3DS__ $(DEFINES)
 
 CXXFLAGS	:=	$(CFLAGS) -fno-rtti -fno-exceptions -std=gnu++11
 

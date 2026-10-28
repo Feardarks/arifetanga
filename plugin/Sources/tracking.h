@@ -32,6 +32,9 @@ void tracking_stop(void);
 
 void tracking_get(TrackingStatus* out);
 
+// Teşhis günlüğüne bir satır yazar (main.cpp).
+void kt_log(const char* text);
+
 #ifdef __cplusplus
 }
 #endif

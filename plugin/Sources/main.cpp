@@ -14,6 +14,33 @@
 
 extern "C" vu32* hidSharedMem;
 
+// Teşhis günlüğü: plugin'in hangi adımda kaldığını görmek için SD karta yazar.
+// Ana thread ve takip thread'i birlikte yazabildiği için kilitli.
+static const char* LOG_PATH = "/luma/plugins/kafatakip_log.txt";
+static LightLock s_logLock;
+static bool s_logReady;
+
+static void LogInit(void)
+{
+	LightLock_Init(&s_logLock);
+	CTRPluginFramework::File::Remove(LOG_PATH);
+	s_logReady = true;
+}
+
+extern "C" void kt_log(const char* text)
+{
+	using CTRPluginFramework::File;
+	if (!s_logReady)
+		return;
+	LightLock_Lock(&s_logLock);
+	File f;
+	if (File::Open(f, LOG_PATH, File::WRITE | File::CREATE | File::APPEND) == File::SUCCESS) {
+		f.WriteLine(text);
+		f.Close();
+	}
+	LightLock_Unlock(&s_logLock);
+}
+
 namespace CTRPluginFramework
 {
 	// Kafa -> circle pad eşlemesi (cm)
@@ -150,8 +177,16 @@ namespace CTRPluginFramework
 		}
 	}
 
+	// main'den önce, oyun başlamadan çağrılır.
+	void PatchProcess(FwkSettings&)
+	{
+		LogInit();
+		kt_log("PatchProcess: plugin yuklendi");
+	}
+
 	int main(void)
 	{
+		kt_log("main: basladi");
 		PluginMenu* menu = new PluginMenu("KafaTakip", 0, 1, 0,
 			"On kamerayla kafa takibi.\n"
 			"Durum yazisi oyun ekraninin sol ustunde.\n"
@@ -160,24 +195,39 @@ namespace CTRPluginFramework
 
 		s_osdEntry = new MenuEntry("Durum yazisi", OsdToggle, "Takip durumunu ust ekranda gosterir.");
 		*menu += s_osdEntry;
+#ifndef KAFATAKIP_MINIMAL
 		*menu += new MenuEntry("Kafa -> circle pad", HeadToCirclePad,
 			"Kafani saga/sola/yukari/asagi egince circle pad o yone itilir.\n"
 			"Acildigi andaki kafa konumu merkez olur.");
 		*menu += new MenuEntry("Merkezle", nullptr, Recenter, "Su anki kafa konumunu merkez yapar.");
-
+#endif
 		s_osdEntry->Enable();
+		kt_log("main: menu olusturuldu");
 
+#ifdef KAFATAKIP_MINIMAL
+		// Test sürümü: kamera/takip yok, sadece plugin'in yüklenip menünün açıldığını gösterir.
+		OSD::Notify("KafaTakip TEST yuklendi. Menu: SELECT", Color::LimeGreen);
+#else
 		Process::SetProcessEventCallback(OnProcessEvent);
 		OSD::Run(DrawStatus);
+		kt_log("main: OSD baglandi");
 
-		if (!tracking_start())
+		if (!tracking_start()) {
+			kt_log("main: takip thread'i baslatilamadi");
 			OSD::Notify("KafaTakip: takip thread'i baslatilamadi", Color::Red);
-		else
+		} else {
+			kt_log("main: takip thread'i baslatildi");
 			OSD::Notify("KafaTakip yuklendi. Menu: SELECT", Color::LimeGreen);
+		}
+#endif
 
+		kt_log("main: menu calisiyor");
 		menu->Run();
 
+#ifndef KAFATAKIP_MINIMAL
 		tracking_stop();
+#endif
+		kt_log("main: bitti");
 		delete menu;
 		return 0;
 	}

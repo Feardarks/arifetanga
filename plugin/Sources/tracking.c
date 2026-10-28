@@ -4,6 +4,7 @@
 // çekirdeği kullanamıyor) en düşük öncelikte çalışır; böylece sadece oyun
 // boşta beklerken (ör. VBlank) CPU alır ve oyunu mümkün olduğunca az yavaşlatır.
 
+#include <stdio.h>
 #include <string.h>
 
 #include "camera.h"
@@ -62,8 +63,10 @@ static void thread_main(void* arg)
 	memset(&st, 0, sizeof(st));
 	st.state = TRACK_STARTING;
 	set_status(&st);
+	kt_log("takip: thread basladi");
 
 	if (!face_init()) {
+		kt_log("takip: yuz kaskadi yuklenemedi (bellek)");
 		st.state = TRACK_ERROR;
 		st.error = -1;
 		set_status(&st);
@@ -95,7 +98,11 @@ static void thread_main(void* arg)
 		}
 
 		if (!cameraOpen) {
+			kt_log("takip: kamera aciliyor");
 			Result res = camera_open();
+			char msg[64];
+			snprintf(msg, sizeof(msg), "takip: camera_open = 0x%08lX", res);
+			kt_log(msg);
 			if (R_FAILED(res)) {
 				camera_close();
 				st.state = TRACK_ERROR;
@@ -116,6 +123,9 @@ static void thread_main(void* arg)
 
 		if (!camera_wait_frame(FRAME_TIMEOUT_NS))
 			continue;
+
+		if (frames == 0 && st.camFps == 0.0f)
+			kt_log("takip: ilk kamera karesi geldi");
 
 		to_gray(camera_frame(), s_gray);
 		u64 t0 = svcGetSystemTick();
